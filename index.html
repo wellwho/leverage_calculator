@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Leveraged DCA Ladder Calculator — MEXC</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #131922;
+    --panel2: #1a2230;
+    --border: #243044;
+    --text: #e6edf3;
+    --muted: #8b98a9;
+    --accent: #4fd1c5;
+    --accent2: #f6ad55;
+    --green: #48bb78;
+    --red: #f56565;
+    --mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px;
+  }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  input {
+    width: 100%;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 9px 10px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: var(--mono);
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  .price-row { display: flex; gap: 8px; align-items: flex-end; }
+  .price-row > div:first-child { flex: 1; }
+  button {
+    background: var(--accent);
+    color: #0b0f14;
+    border: none;
+    padding: 9px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { opacity: 0.88; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  .price-status { font-size: 12px; margin-top: 6px; min-height: 16px; }
+  .price-status.ok { color: var(--green); }
+  .price-status.err { color: var(--red); }
+  .price-status.pending { color: var(--muted); }
+  .calc-btn-row { margin-top: 18px; display: flex; gap: 10px; }
+  .calc-btn-row button { flex: 0 0 auto; padding: 11px 22px; font-size: 14px; }
+  .error-box {
+    background: rgba(245,101,101,0.1);
+    border: 1px solid var(--red);
+    color: var(--red);
+    padding: 12px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 20px;
+    display: none;
+  }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+  }
+  .stat { background: var(--panel2); border-radius: 8px; padding: 12px 14px; }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+  .stat .value { font-size: 17px; font-weight: 600; font-family: var(--mono); }
+  .stat .value.liq { color: var(--red); }
+  .stat .value.cov { color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 9px 10px; text-align: right; border-bottom: 1px solid var(--border); font-family: var(--mono); white-space: nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+  tbody tr:hover { background: rgba(255,255,255,0.02); }
+  .action-buy { color: var(--text); }
+  .action-margin { color: var(--accent2); font-weight: 600; }
+  .table-scroll { overflow-x: auto; }
+  .results { display: none; }
+  .note {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.6;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  footer { text-align: center; color: var(--muted); font-size: 11px; margin-top: 30px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Leveraged DCA Ladder Calculator</h1>
+  <div class="subtitle">Isolated-margin laddered buys sized to survive a target drawdown before liquidation. Live prices from MEXC Futures.</div>
+
+  <div class="card">
+    <h2>Inputs</h2>
+    <div class="grid">
+      <div>
+        <label for="symbol">Asset (vs USDT)</label>
+        <div class="price-row">
+          <div><input id="symbol" type="text" value="CRV" /></div>
+          <button id="fetchBtn">Get price</button>
+        </div>
+        <div id="priceStatus" class="price-status"></div>
+      </div>
+      <div>
+        <label for="entry">Entry price ($)</label>
+        <input id="entry" type="number" step="any" value="0.223" />
+      </div>
+      <div>
+        <label for="numBuys">Number of buys</label>
+        <input id="numBuys" type="number" step="1" min="1" max="30" value="12" />
+      </div>
+      <div>
+        <label for="targetDrawdown">Drawdown coverage (%)</label>
+        <input id="targetDrawdown" type="number" step="any" min="1" max="99" value="95" />
+      </div>
+      <div>
+        <label for="capital">Total capital ($)</label>
+        <input id="capital" type="number" step="any" value="951" />
+      </div>
+      <div>
+        <label for="leverage">Leverage (x)</label>
+        <input id="leverage" type="number" step="any" value="5" />
+      </div>
+      <div>
+        <label for="mmr">Maintenance margin rate (%)</label>
+        <input id="mmr" type="number" step="any" value="1" />
+      </div>
+    </div>
+    <div class="calc-btn-row">
+      <button id="calcBtn">Calculate plan</button>
+      <button id="resetBtn" class="secondary">Reset</button>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <div id="results" class="results">
+    <div class="card">
+      <h2>Summary</h2>
+      <div class="summary-grid">
+        <div class="stat"><div class="label">Total buys ($)</div><div class="value" id="sumBuys">—</div></div>
+        <div class="stat"><div class="label">Margin add ($)</div><div class="value" id="sumMargin">—</div></div>
+        <div class="stat"><div class="label">Total deployed ($)</div><div class="value" id="sumDeployed">—</div></div>
+        <div class="stat"><div class="label">Final qty</div><div class="value" id="sumQty">—</div></div>
+        <div class="stat"><div class="label">Final avg entry ($)</div><div class="value" id="sumAvg">—</div></div>
+        <div class="stat"><div class="label">Final liquidation ($)</div><div class="value liq" id="sumLiq">—</div></div>
+        <div class="stat"><div class="label">Drawdown covered</div><div class="value cov" id="sumCovered">—</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Ladder</h2>
+      <div class="table-scroll">
+        <table id="planTable">
+          <thead>
+            <tr>
+              <th>Step</th>
+              <th>Action</th>
+              <th>Trigger price ($)</th>
+              <th>Drawdown</th>
+              <th>$ amount</th>
+              <th>New qty</th>
+              <th>Cumulative qty</th>
+              <th>Avg entry ($)</th>
+              <th>Liquidation ($)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="note">
+        Fees and funding are ignored. Liquidation price uses MEXC's isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls; the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target.
+      </div>
+    </div>
+  </div>
+
+  <footer>Prices via MEXC Futures public ticker. Not financial advice.</footer>
+</div>
+
+<script src="calc.js"></script>
+<script>
+const fmt2 = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt4 = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+const fmtQty = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtPrice = (n) => {
+  if (n === null || n === undefined) return 'n/a';
+  const abs = Math.abs(n);
+  const digits = abs < 1 ? 6 : 4;
+  return n.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+};
+
+const el = (id) => document.getElementById(id);
+
+el('fetchBtn').addEventListener('click', async () => {
+  const symRaw = el('symbol').value.trim().toUpperCase();
+  if (!symRaw) return;
+  const symbol = symRaw.endsWith('_USDT') ? symRaw : `${symRaw}_USDT`;
+  const statusEl = el('priceStatus');
+  statusEl.textContent = 'Fetching…';
+  statusEl.className = 'price-status pending';
+  el('fetchBtn').disabled = true;
+  try {
+    const res = await fetch(`/api/price?symbol=${encodeURIComponent(symbol)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch price.');
+    el('entry').value = data.lastPrice;
+    statusEl.textContent = `${data.symbol} last price: $${data.lastPrice} (MEXC Futures)`;
+    statusEl.className = 'price-status ok';
+  } catch (err) {
+    statusEl.textContent = err.message || 'Could not fetch price — enter it manually.';
+    statusEl.className = 'price-status err';
+  } finally {
+    el('fetchBtn').disabled = false;
+  }
+});
+
+el('calcBtn').addEventListener('click', () => {
+  const errorBox = el('errorBox');
+  const resultsBox = el('results');
+  errorBox.style.display = 'none';
+  resultsBox.style.display = 'none';
+
+  const params = {
+    entry: parseFloat(el('entry').value),
+    leverage: parseFloat(el('leverage').value),
+    mmr: parseFloat(el('mmr').value) / 100,
+    capital: parseFloat(el('capital').value),
+    numBuys: parseInt(el('numBuys').value, 10),
+    targetDrawdownPct: parseFloat(el('targetDrawdown').value),
+  };
+
+  if (Object.values(params).some((v) => Number.isNaN(v))) {
+    errorBox.textContent = 'Please fill in all fields with valid numbers.';
+    errorBox.style.display = 'block';
+    return;
+  }
+
+  let result;
+  try {
+    result = computePlan(params);
+  } catch (err) {
+    errorBox.textContent = err.message;
+    errorBox.style.display = 'block';
+    return;
+  }
+
+  el('sumBuys').textContent = `$${fmt2(result.totalBuys)}`;
+  el('sumMargin').textContent = `$${fmt2(result.margin)}`;
+  el('sumDeployed').textContent = `$${fmt2(result.totalDeployed)}`;
+  el('sumQty').textContent = fmtQty(result.finalQty);
+  el('sumAvg').textContent = `$${fmtPrice(result.finalAvgEntry)}`;
+  el('sumLiq').textContent = `$${fmtPrice(result.finalLiq)}`;
+  el('sumCovered').textContent = `${(result.drawdownCovered * 100).toFixed(2)}%`;
+
+  const tbody = document.querySelector('#planTable tbody');
+  tbody.innerHTML = '';
+  result.rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    const isMargin = row.action === 'Add Margin';
+    tr.innerHTML = `
+      <td>${row.step}</td>
+      <td class="${isMargin ? 'action-margin' : 'action-buy'}">${row.action}</td>
+      <td>$${fmtPrice(row.price)}</td>
+      <td>${(row.drawdown * 100).toFixed(2)}%</td>
+      <td>$${fmt2(row.amount)}</td>
+      <td>${row.newQty ? fmtQty(row.newQty) : '—'}</td>
+      <td>${fmtQty(row.cumQty)}</td>
+      <td>$${fmtPrice(row.avgEntry)}</td>
+      <td>${row.liq === null ? 'n/a — nothing at risk yet' : `$${fmtPrice(row.liq)}`}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  resultsBox.style.display = 'block';
+});
+
+el('resetBtn').addEventListener('click', () => {
+  el('symbol').value = 'CRV';
+  el('entry').value = '0.223';
+  el('numBuys').value = '12';
+  el('targetDrawdown').value = '95';
+  el('capital').value = '951';
+  el('leverage').value = '5';
+  el('mmr').value = '1';
+  el('priceStatus').textContent = '';
+  el('errorBox').style.display = 'none';
+  el('results').style.display = 'none';
+});
+
+// auto-run once on load with the defaults
+el('calcBtn').click();
+</script>
+</body>
+</html>

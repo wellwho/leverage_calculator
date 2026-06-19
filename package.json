@@ -1,0 +1,12 @@
+{
+  "name": "crv-leverage-calculator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Leveraged DCA ladder calculator with live MEXC price fetch.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test/backfill.test.js"
+  }
+}
