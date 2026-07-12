@@ -164,6 +164,7 @@
   </div>
 
   <div id="errorBox" class="error-box"></div>
+  <div id="execBox" class="error-box" style="background: rgba(79,209,197,0.08); border-color: var(--accent); color: var(--text);"></div>
 
   <div id="results" class="results">
     <div class="card">
@@ -203,6 +204,30 @@
         Fees and funding are ignored. Liquidation price uses MEXC's isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls; the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target.
       </div>
     </div>
+
+    <div class="card">
+      <h2>Execute</h2>
+      <div class="calc-btn-row" style="margin-top: 0;">
+        <button id="executeBtn">Execute plan on MEXC</button>
+      </div>
+      <div id="execStatus" class="price-status" style="margin-top: 10px;"></div>
+      <div class="table-scroll">
+        <table id="execTable" style="display: none; margin-top: 10px;">
+          <thead>
+            <tr>
+              <th>Step</th>
+              <th>Price ($)</th>
+              <th>Vol (contracts)</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="note">
+        Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). The "Add Margin" step is not automated — add that margin yourself in the MEXC app once Buy #1 fills, using the amount shown in the table above.
+      </div>
+    </div>
   </div>
 
   <footer>Prices via MEXC Futures public ticker. Not financial advice.</footer>
@@ -221,6 +246,12 @@ const fmtPrice = (n) => {
 };
 
 const el = (id) => document.getElementById(id);
+let lastPlan = null;
+
+const toFuturesSymbol = (raw) => {
+  const s = raw.trim().toUpperCase();
+  return s.endsWith('_USDT') ? s : `${s}_USDT`;
+};
 
 el('fetchBtn').addEventListener('click', async () => {
   const symRaw = el('symbol').value.trim().toUpperCase();
@@ -275,6 +306,11 @@ el('calcBtn').addEventListener('click', () => {
     return;
   }
 
+  lastPlan = result;
+  el('execBox').style.display = 'none';
+  el('execStatus').textContent = '';
+  el('execTable').style.display = 'none';
+
   el('sumBuys').textContent = `$${fmt2(result.totalBuys)}`;
   el('sumMargin').textContent = `$${fmt2(result.margin)}`;
   el('sumDeployed').textContent = `$${fmt2(result.totalDeployed)}`;
@@ -305,6 +341,67 @@ el('calcBtn').addEventListener('click', () => {
   resultsBox.style.display = 'block';
 });
 
+el('executeBtn').addEventListener('click', async () => {
+  const execBox = el('execBox');
+  const statusEl = el('execStatus');
+  const table = el('execTable');
+  const tbody = table.querySelector('tbody');
+  execBox.style.display = 'none';
+
+  if (!lastPlan) {
+    statusEl.textContent = 'Calculate a plan first.';
+    statusEl.className = 'price-status err';
+    return;
+  }
+
+  const orders = lastPlan.rows
+    .filter((r) => r.action.startsWith('Limit Buy'))
+    .map((r) => ({ step: r.step, price: r.price, qty: r.newQty }));
+
+  const symbol = toFuturesSymbol(el('symbol').value);
+  const leverage = parseFloat(el('leverage').value);
+
+  const ok = confirm(`Place ${orders.length} live limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x)? This uses real funds.`);
+  if (!ok) return;
+
+  el('executeBtn').disabled = true;
+  statusEl.textContent = `Placing ${orders.length} orders…`;
+  statusEl.className = 'price-status pending';
+  table.style.display = 'none';
+  tbody.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, leverage, orders }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Execution failed.');
+
+    const successCount = data.results.filter((r) => r.success).length;
+    statusEl.textContent = `${successCount}/${data.results.length} orders placed successfully.`;
+    statusEl.className = successCount === data.results.length ? 'price-status ok' : 'price-status err';
+
+    data.results.forEach((r) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${r.step}</td>
+        <td>$${fmtPrice(r.price)}</td>
+        <td>${r.vol}</td>
+        <td style="color: ${r.success ? 'var(--green)' : 'var(--red)'}; text-align: left;">${r.success ? `Filled/resting — order ${r.orderId}` : r.error}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    table.style.display = '';
+  } catch (err) {
+    statusEl.textContent = err.message || 'Execution failed.';
+    statusEl.className = 'price-status err';
+  } finally {
+    el('executeBtn').disabled = false;
+  }
+});
+
 el('resetBtn').addEventListener('click', () => {
   el('symbol').value = 'CRV';
   el('entry').value = '0.223';
@@ -315,7 +412,11 @@ el('resetBtn').addEventListener('click', () => {
   el('mmr').value = '1';
   el('priceStatus').textContent = '';
   el('errorBox').style.display = 'none';
+  el('execBox').style.display = 'none';
+  el('execStatus').textContent = '';
+  el('execTable').style.display = 'none';
   el('results').style.display = 'none';
+  lastPlan = null;
 });
 
 // auto-run once on load with the defaults

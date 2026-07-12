@@ -6,6 +6,7 @@ One-page calculator for sizing a laddered leveraged DCA position (isolated margi
 - `index.html` — UI (inputs + results table)
 - `calc.js` — calculation engine (shared by the browser and tested via Node)
 - `api/price.js` — Vercel serverless function that proxies MEXC's futures ticker (avoids browser CORS)
+- `api/execute.js` — Vercel serverless function that places the ladder's limit buy orders on MEXC Futures
 
 ## Deploy to Vercel — detailed walkthrough
 
@@ -88,6 +89,27 @@ Press Enter and wait. It prints your permanent URL, e.g. `https://crv-calculator
 ### 11. (Optional) Use your own domain
 If you own a domain name: in your browser go to vercel.com, log in, open this project, go to **Settings → Domains**, type your domain, and follow the DNS instructions shown on screen.
 
+## Execute plan on MEXC (auto-place orders)
+
+The "Execute" card at the bottom of the calculated plan places every "Limit Buy" row as an isolated-margin, open-long limit order on MEXC Futures via `api/execute.js`. The "Add Margin" step is intentionally **not** automated — MEXC only lets you add margin to a position that already exists, which means it needs a position ID that doesn't exist until Buy #1 fills. Add that margin yourself in the MEXC app once you see the fill, using the dollar amount already shown in the ladder table.
+
+### One-time setup
+
+1. **Create a MEXC API key**: MEXC website → profile icon → API Management → Create API. Your account needs KYC completed to enable futures trading permission.
+   - Enable the **Futures → Order Placing** permission.
+   - IP binding: Vercel serverless functions don't have a fixed outbound IP, so leave the key **unbound** (unrestricted) unless you've set up a static-IP add-on. Unbound keys expire after 90 days and need renewing in MEXC's API Management page.
+2. **Add the key to Vercel** (Project → Settings → Environment Variables):
+   - `MEXC_API_KEY` = your Access Key
+   - `MEXC_API_SECRET` = your Secret Key
+   - Redeploy (`vercel --prod`) after adding them — env vars only take effect on the next deploy.
+3. That's it — the key never touches the browser. `Execute plan on MEXC` calls `/api/execute`, which reads the key server-side and signs each request.
+
+### What it does per click
+- Converts each buy's base-asset quantity into MEXC's contract count (`vol`) using the live contract spec (`contractSize`, `priceScale`, `volScale`).
+- Places each order sequentially with ~550ms spacing to stay under MEXC's order-placement rate limit (4 requests / 2s).
+- Shows a per-order result (order ID or the specific MEXC error) once all orders have been submitted.
+- Asks for a browser confirmation before sending anything — no orders go out on an accidental click.
+
 ## Local testing
 
 ```
@@ -110,3 +132,5 @@ It's also wired into `vercel.json` as the build step — `vercel` / `vercel --pr
 - Fees and funding are ignored.
 - Liquidation price formula: `Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity` (MEXC isolated margin).
 - Buy sizes grow geometrically (×1.26 per step); the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target.
+
+Testing auto-deploy

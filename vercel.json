@@ -1,3 +1,6 @@
 {
-  "buildCommand": "npm test"
+  "buildCommand": "npm test",
+  "functions": {
+    "api/execute.js": { "maxDuration": 60 }
+  }
 }
