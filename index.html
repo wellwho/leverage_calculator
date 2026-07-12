@@ -205,7 +205,7 @@
         </table>
       </div>
       <div class="note">
-        Fees and funding are ignored. Liquidation price uses MEXC's isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls; the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target.
+        Fees and funding are ignored. Liquidation price uses MEXC's isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls; the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price.
       </div>
     </div>
 
@@ -349,9 +349,10 @@ el('calcBtn').addEventListener('click', () => {
   result.rows.forEach((row) => {
     const tr = document.createElement('tr');
     const isMargin = row.action === 'Add Margin';
+    const displayAction = row.step === 1 ? 'Market Buy #1' : row.action;
     tr.innerHTML = `
       <td>${row.step}</td>
-      <td class="${isMargin ? 'action-margin' : 'action-buy'}">${row.action}</td>
+      <td class="${isMargin ? 'action-margin' : 'action-buy'}">${displayAction}</td>
       <td>$${fmtPrice(row.price)}</td>
       <td>${(row.drawdown * 100).toFixed(2)}%</td>
       <td>$${fmt2(row.amount)}</td>
@@ -381,12 +382,13 @@ el('executeBtn').addEventListener('click', async () => {
 
   const orders = lastPlan.rows
     .filter((r) => r.action.startsWith('Limit Buy'))
-    .map((r) => ({ step: r.step, price: r.price, qty: r.newQty }));
+    .map((r) => ({ step: r.step, price: r.price, qty: r.newQty, market: r.step === 1 }));
 
   const symbol = toFuturesSymbol(el('symbol').value);
   const leverage = parseFloat(el('leverage').value);
 
-  const ok = confirm(`Place ${orders.length} live limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x)? This uses real funds.`);
+  const limitCount = orders.filter((o) => !o.market).length;
+  const ok = confirm(`Place 1 market buy + ${limitCount} limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x)? This uses real funds.`);
   if (!ok) return;
 
   el('executeBtn').disabled = true;
@@ -410,11 +412,12 @@ el('executeBtn').addEventListener('click', async () => {
 
     data.results.forEach((r) => {
       const tr = document.createElement('tr');
+      const label = r.orderType === 'market' ? 'Market' : 'Limit';
       tr.innerHTML = `
         <td>${r.step}</td>
         <td>$${fmtPrice(r.price)}</td>
         <td>${r.vol}</td>
-        <td style="color: ${r.success ? 'var(--green)' : 'var(--red)'}; text-align: left;">${r.success ? `Filled/resting — order ${r.orderId}` : r.error}</td>
+        <td style="color: ${r.success ? 'var(--green)' : 'var(--red)'}; text-align: left;">${r.success ? `${label} — order ${r.orderId}` : r.error}</td>
       `;
       tbody.appendChild(tr);
     });

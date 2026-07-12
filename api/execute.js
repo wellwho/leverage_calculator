@@ -106,7 +106,7 @@ module.exports = async (req, res) => {
       vol,
       leverage: Number(leverage),
       side: 1, // open long
-      type: 1, // limit
+      type: order.market ? 5 : 1, // 5: market (fills now), 1: limit (rests on the book)
       openType: 1, // isolated
     };
 
@@ -116,12 +116,13 @@ module.exports = async (req, res) => {
         step: order.step,
         price,
         vol,
+        orderType: order.market ? 'market' : 'limit',
         success: !!data.success,
         orderId: data?.data?.orderId || null,
         error: data.success ? null : data.message || `MEXC error code ${data.code}`,
       });
     } catch (err) {
-      results.push({ step: order.step, price, vol, success: false, orderId: null, error: String(err.message || err) });
+      results.push({ step: order.step, price, vol, orderType: order.market ? 'market' : 'limit', success: false, orderId: null, error: String(err.message || err) });
     }
 
     await sleep(ORDER_SPACING_MS);

@@ -107,6 +107,7 @@ The "Execute" card at the bottom of the calculated plan places every "Limit Buy"
 
 ### What it does per click
 - Converts each buy's base-asset quantity into MEXC's contract count (`vol`) using the live contract spec (`contractSize`, `priceScale`, `volScale`).
+- Buy #1 is placed as a **market** order (fills immediately at the live price); every other buy is a **limit** order resting at its ladder price. This is a display/execution-layer choice only — `calc.js`'s sizing math is unaffected.
 - Places each order sequentially with ~550ms spacing to stay under MEXC's order-placement rate limit (4 requests / 2s).
 - Shows a per-order result (order ID or the specific MEXC error) once all orders have been submitted.
 - Asks for a browser confirmation before sending anything — no orders go out on an accidental click.
