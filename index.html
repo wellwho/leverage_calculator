@@ -119,8 +119,13 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Leveraged DCA Ladder Calculator</h1>
-  <div class="subtitle">Isolated-margin laddered buys sized to survive a target drawdown before liquidation. Live prices from MEXC Futures.</div>
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
+    <div>
+      <h1>Leveraged DCA Ladder Calculator</h1>
+      <div class="subtitle">Isolated-margin laddered buys sized to survive a target drawdown before liquidation. Live prices from MEXC Futures.</div>
+    </div>
+    <button id="logoutBtn" class="secondary" style="flex: 0 0 auto; margin-top: 2px;">Log out</button>
+  </div>
 
   <div class="card">
     <h2>Inputs</h2>
@@ -281,6 +286,15 @@ el('fetchBtn').addEventListener('click', async () => {
   } finally {
     el('fetchBtn').disabled = false;
   }
+});
+
+el('logoutBtn').addEventListener('click', async () => {
+  try {
+    await fetch('/api/logout', { method: 'POST' });
+  } catch {
+    // ignore — redirecting to /login.html either way
+  }
+  window.location.href = '/login.html';
 });
 
 el('balanceBtn').addEventListener('click', async () => {

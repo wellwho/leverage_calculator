@@ -8,5 +8,8 @@
   },
   "scripts": {
     "test": "node test/backfill.test.js"
+  },
+  "dependencies": {
+    "@vercel/functions": "^3.7.5"
   }
 }

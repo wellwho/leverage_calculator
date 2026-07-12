@@ -8,6 +8,9 @@ One-page calculator for sizing a laddered leveraged DCA position (isolated margi
 - `api/price.js` — Vercel serverless function that proxies MEXC's futures ticker (avoids browser CORS)
 - `api/execute.js` — Vercel serverless function that places the ladder's limit buy orders on MEXC Futures
 - `api/balance.js` — Vercel serverless function that fetches your available USDT futures balance
+- `login.html` — sign-in page
+- `api/login.js` / `api/logout.js` — issue/clear the session cookie
+- `middleware.mjs` — gates every route behind that session cookie
 
 ## Deploy to Vercel — detailed walkthrough
 
@@ -115,6 +118,42 @@ The "Execute" card at the bottom of the calculated plan places every "Limit Buy"
 ## Pull available funds from MEXC
 
 The "Get balance" button next to Total capital calls `api/balance.js`, which signs a request to MEXC's `Get Single Currency Asset Information` endpoint for USDT and fills the Total capital field with **usable amount** (`availableOpen` — MEXC's figure for what you can actually deploy into a new position, distinct from total equity or withdrawable balance). Requires the same `MEXC_API_KEY` / `MEXC_API_SECRET` env vars as execution, plus the key's "View Account Details" permission.
+
+## Login
+
+Since this deployment now trades on a real MEXC account, the whole app — the calculator page and every `api/*` endpoint — sits behind a login. `middleware.mjs` checks every request for a signed session cookie; anyone without one is redirected to `login.html` (or, for API calls, gets a 401).
+
+### One-time setup
+
+In Terminal, from the `calculator` folder:
+```
+vercel env add APP_USERNAME
+```
+Pick a username, paste it when prompted.
+```
+vercel env add APP_PASSWORD
+```
+Pick a strong password, paste it when prompted.
+```
+openssl rand -hex 32
+```
+Copy the random string it prints, then:
+```
+vercel env add SESSION_SECRET
+```
+Paste that random string when prompted (this is what signs the session cookie — never reuse it for anything else, and don't reuse your MEXC secret).
+
+For each of the three, select all environments (Production/Preview/Development) unless you have a reason not to. Then redeploy:
+```
+vercel --prod
+```
+
+### How it works
+- Signing in at `/login.html` posts to `api/login.js`, which checks the username/password against `APP_USERNAME`/`APP_PASSWORD` (constant-time comparison) and, on success, sets an `HttpOnly`, `Secure`, `SameSite=Strict` cookie signed with `SESSION_SECRET`. The cookie only carries an expiry timestamp + signature — no password material.
+- Sessions last 7 days, then you're prompted to sign in again.
+- `middleware.mjs` runs on Vercel's Node.js runtime (not Edge) so it shares byte-for-byte the same HMAC signing code as `api/login.js` — no cross-runtime crypto mismatches.
+- "Log out" (top-right of the calculator) calls `api/logout.js`, which clears the cookie, then sends you back to `login.html`.
+- This is single-user auth (one shared username/password) — there's no user database, matching the fact that this deploys against one MEXC account.
 
 ## Local testing
 
