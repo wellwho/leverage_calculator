@@ -39,18 +39,19 @@
   .card h2 { font-size: 15px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 14px;
   }
+  .grid + .grid { margin-top: 14px; }
   label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
   input {
     width: 100%;
     background: var(--panel2);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 9px 10px;
+    padding: 11px 12px;
     border-radius: 6px;
-    font-size: 14px;
+    font-size: 16px;
     font-family: var(--mono);
   }
   input:focus { outline: none; border-color: var(--accent); }
@@ -137,14 +138,6 @@
         <input id="entry" type="number" step="any" value="0.223" />
       </div>
       <div>
-        <label for="numBuys">Number of buys</label>
-        <input id="numBuys" type="number" step="1" min="1" max="30" value="12" />
-      </div>
-      <div>
-        <label for="targetDrawdown">Drawdown coverage (%)</label>
-        <input id="targetDrawdown" type="number" step="any" min="1" max="99" value="95" />
-      </div>
-      <div>
         <label for="capital">Total capital ($)</label>
         <div class="price-row">
           <div><input id="capital" type="number" step="any" value="951" /></div>
@@ -155,6 +148,16 @@
       <div>
         <label for="leverage">Leverage (x)</label>
         <input id="leverage" type="number" step="any" value="5" />
+      </div>
+    </div>
+    <div class="grid">
+      <div>
+        <label for="numBuys">Number of buys</label>
+        <input id="numBuys" type="number" step="1" min="1" max="30" value="12" />
+      </div>
+      <div>
+        <label for="targetDrawdown">Drawdown coverage (%)</label>
+        <input id="targetDrawdown" type="number" step="any" min="1" max="99" value="95" />
       </div>
       <div>
         <label for="mmr">Maintenance margin rate (%)</label>
