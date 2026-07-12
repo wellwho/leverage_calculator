@@ -146,7 +146,11 @@
       </div>
       <div>
         <label for="capital">Total capital ($)</label>
-        <input id="capital" type="number" step="any" value="951" />
+        <div class="price-row">
+          <div><input id="capital" type="number" step="any" value="951" /></div>
+          <button id="balanceBtn" class="secondary">Get balance</button>
+        </div>
+        <div id="balanceStatus" class="price-status"></div>
       </div>
       <div>
         <label for="leverage">Leverage (x)</label>
@@ -273,6 +277,27 @@ el('fetchBtn').addEventListener('click', async () => {
     statusEl.className = 'price-status err';
   } finally {
     el('fetchBtn').disabled = false;
+  }
+});
+
+el('balanceBtn').addEventListener('click', async () => {
+  const statusEl = el('balanceStatus');
+  statusEl.textContent = 'Fetching…';
+  statusEl.className = 'price-status pending';
+  el('balanceBtn').disabled = true;
+  try {
+    const res = await fetch('/api/balance?currency=USDT');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch balance.');
+    const usable = Number(data.availableOpen);
+    el('capital').value = usable.toFixed(2);
+    statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Futures)`;
+    statusEl.className = 'price-status ok';
+  } catch (err) {
+    statusEl.textContent = err.message || 'Could not fetch balance — enter it manually.';
+    statusEl.className = 'price-status err';
+  } finally {
+    el('balanceBtn').disabled = false;
   }
 });
 
@@ -411,6 +436,7 @@ el('resetBtn').addEventListener('click', () => {
   el('leverage').value = '5';
   el('mmr').value = '1';
   el('priceStatus').textContent = '';
+  el('balanceStatus').textContent = '';
   el('errorBox').style.display = 'none';
   el('execBox').style.display = 'none';
   el('execStatus').textContent = '';

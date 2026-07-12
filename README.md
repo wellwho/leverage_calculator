@@ -7,6 +7,7 @@ One-page calculator for sizing a laddered leveraged DCA position (isolated margi
 - `calc.js` — calculation engine (shared by the browser and tested via Node)
 - `api/price.js` — Vercel serverless function that proxies MEXC's futures ticker (avoids browser CORS)
 - `api/execute.js` — Vercel serverless function that places the ladder's limit buy orders on MEXC Futures
+- `api/balance.js` — Vercel serverless function that fetches your available USDT futures balance
 
 ## Deploy to Vercel — detailed walkthrough
 
@@ -96,7 +97,7 @@ The "Execute" card at the bottom of the calculated plan places every "Limit Buy"
 ### One-time setup
 
 1. **Create a MEXC API key**: MEXC website → profile icon → API Management → Create API. Your account needs KYC completed to enable futures trading permission.
-   - Enable the **Futures → Order Placing** permission.
+   - Enable both the **Futures → Order Placing** permission (for execution) and **Futures → View Account Details** permission (for the "Get balance" button).
    - IP binding: Vercel serverless functions don't have a fixed outbound IP, so leave the key **unbound** (unrestricted) unless you've set up a static-IP add-on. Unbound keys expire after 90 days and need renewing in MEXC's API Management page.
 2. **Add the key to Vercel** (Project → Settings → Environment Variables):
    - `MEXC_API_KEY` = your Access Key
@@ -109,6 +110,10 @@ The "Execute" card at the bottom of the calculated plan places every "Limit Buy"
 - Places each order sequentially with ~550ms spacing to stay under MEXC's order-placement rate limit (4 requests / 2s).
 - Shows a per-order result (order ID or the specific MEXC error) once all orders have been submitted.
 - Asks for a browser confirmation before sending anything — no orders go out on an accidental click.
+
+## Pull available funds from MEXC
+
+The "Get balance" button next to Total capital calls `api/balance.js`, which signs a request to MEXC's `Get Single Currency Asset Information` endpoint for USDT and fills the Total capital field with **usable amount** (`availableOpen` — MEXC's figure for what you can actually deploy into a new position, distinct from total equity or withdrawable balance). Requires the same `MEXC_API_KEY` / `MEXC_API_SECRET` env vars as execution, plus the key's "View Account Details" permission.
 
 ## Local testing
 
