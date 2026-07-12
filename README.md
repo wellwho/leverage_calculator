@@ -8,6 +8,7 @@ One-page calculator for sizing a laddered leveraged DCA position (isolated margi
 - `api/price.js` — Vercel serverless function that proxies MEXC's futures ticker (avoids browser CORS)
 - `api/execute.js` — Vercel serverless function that places the ladder's limit buy orders on MEXC Futures
 - `api/balance.js` — Vercel serverless function that fetches your available USDT futures balance
+- `api/close.js` — Vercel serverless function behind the "Close Position" panic button
 - `login.html` — sign-in page
 - `api/login.js` / `api/logout.js` — issue/clear the session cookie
 - `middleware.mjs` — gates every route behind that session cookie
@@ -100,7 +101,7 @@ The "Execute" card at the bottom of the calculated plan places every "Limit Buy"
 ### One-time setup
 
 1. **Create a MEXC API key**: MEXC website → profile icon → API Management → Create API. Your account needs KYC completed to enable futures trading permission.
-   - Enable both the **Futures → Order Placing** permission (for execution) and **Futures → View Account Details** permission (for the "Get balance" button).
+   - Enable **Futures → Order Placing** (execution + closing), **Futures → View Account Details** (the "Get balance" button), and **Futures → View Order Details** (the "Close Position" button looks up your open position, which needs this one).
    - IP binding: Vercel serverless functions don't have a fixed outbound IP, so leave the key **unbound** (unrestricted) unless you've set up a static-IP add-on. Unbound keys expire after 90 days and need renewing in MEXC's API Management page.
 2. **Add the key to Vercel** (Project → Settings → Environment Variables):
    - `MEXC_API_KEY` = your Access Key
@@ -118,6 +119,17 @@ The "Execute" card at the bottom of the calculated plan places every "Limit Buy"
 ## Pull available funds from MEXC
 
 The "Get balance" button next to Total capital calls `api/balance.js`, which signs a request to MEXC's `Get Single Currency Asset Information` endpoint for USDT and fills the Total capital field with **usable amount** (`availableOpen` — MEXC's figure for what you can actually deploy into a new position, distinct from total equity or withdrawable balance). Requires the same `MEXC_API_KEY` / `MEXC_API_SECRET` env vars as execution, plus the key's "View Account Details" permission.
+
+## Close Position (panic button)
+
+The red "CLOSE POSITION" button in the Danger Zone card at the bottom calls `api/close.js` for the asset currently entered in the Asset field, and:
+
+1. Cancels every resting order on that symbol first (`order/cancel_all`), so nothing already on the book can fill while — or after — the position is being closed.
+2. Looks up any open position on that symbol (`position/open_positions`, filtered by symbol) and flash-closes it at market (`side` 4/2 for close-long/close-short, `type` market, tagged with that position's own `positionId` and `reduceOnly: true`).
+
+This is deliberately scoped to **one symbol only**. MEXC also has an account-wide `/position/close_all` endpoint that takes no symbol and would close every open position across your whole account — it's intentionally not used here, since this app should only ever touch the pair you're looking at.
+
+Asks for a browser confirmation before doing anything, same as Execute.
 
 ## Login
 

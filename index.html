@@ -71,6 +71,22 @@
   button:hover { opacity: 0.88; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  .danger-card { border-color: var(--red); }
+  .danger-card h2 { color: var(--red); }
+  .danger-btn {
+    width: 100%;
+    background: var(--red);
+    color: #fff;
+    border: none;
+    padding: 20px 20px;
+    border-radius: 8px;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  .danger-btn:hover { opacity: 0.88; }
+  .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .price-status { font-size: 12px; margin-top: 6px; min-height: 16px; }
   .price-status.ok { color: var(--green); }
   .price-status.err { color: var(--red); }
@@ -242,6 +258,27 @@
     </div>
   </div>
 
+  <div class="card danger-card">
+    <h2>Danger Zone</h2>
+    <div class="note" style="margin-top: 0; padding-top: 0; border-top: none; margin-bottom: 16px;">
+      Cancels every open order and flash-closes any open position on the asset entered above, at market, on MEXC. This is account-flattening for that one symbol only — it cannot be undone.
+    </div>
+    <button id="closeBtn" class="danger-btn">CLOSE POSITION</button>
+    <div id="closeStatus" class="price-status" style="margin-top: 10px;"></div>
+    <div class="table-scroll">
+      <table id="closeTable" style="display: none; margin-top: 10px;">
+        <thead>
+          <tr>
+            <th>Step</th>
+            <th>Detail</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
   <footer>Prices via MEXC Futures public ticker. Not financial advice.</footer>
 </div>
 
@@ -285,6 +322,59 @@ el('fetchBtn').addEventListener('click', async () => {
     statusEl.className = 'price-status err';
   } finally {
     el('fetchBtn').disabled = false;
+  }
+});
+
+el('closeBtn').addEventListener('click', async () => {
+  const statusEl = el('closeStatus');
+  const table = el('closeTable');
+  const tbody = table.querySelector('tbody');
+
+  const symbol = toFuturesSymbol(el('symbol').value);
+  const ok = confirm(`Close the ENTIRE ${symbol} position and cancel ALL open orders on MEXC? This cannot be undone.`);
+  if (!ok) return;
+
+  el('closeBtn').disabled = true;
+  statusEl.textContent = `Closing ${symbol}…`;
+  statusEl.className = 'price-status pending';
+  table.style.display = 'none';
+  tbody.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Close failed.');
+
+    const allOk = data.steps.every((s) => s.success);
+    statusEl.textContent = allOk ? `${symbol}: orders canceled, position flat.` : 'Some steps failed — check the table below.';
+    statusEl.className = allOk ? 'price-status ok' : 'price-status err';
+
+    data.steps.forEach((s) => {
+      const tr = document.createElement('tr');
+      const label = s.step === 'cancel_orders' ? 'Cancel orders' : 'Close position';
+      const detail = s.step === 'close_position'
+        ? (s.positionId ? `Position ${s.positionId}${s.vol ? `, vol ${s.vol}` : ''}` : (s.note || '—'))
+        : 'All resting orders';
+      const result = s.success
+        ? (s.orderId ? `Closed — order ${s.orderId}` : (s.note || 'OK'))
+        : s.error;
+      tr.innerHTML = `
+        <td>${label}</td>
+        <td style="text-align: left;">${detail}</td>
+        <td style="color: ${s.success ? 'var(--green)' : 'var(--red)'}; text-align: left;">${result}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    table.style.display = '';
+  } catch (err) {
+    statusEl.textContent = err.message || 'Close failed.';
+    statusEl.className = 'price-status err';
+  } finally {
+    el('closeBtn').disabled = false;
   }
 });
 
