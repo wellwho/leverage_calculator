@@ -1,5 +1,6 @@
 {
   "buildCommand": "npm test",
+  "outputDirectory": ".",
   "functions": {
     "api/execute.js": { "maxDuration": 60 }
   }
