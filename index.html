@@ -432,6 +432,9 @@ async function fetchLivePrice() {
     const res = await fetch(`/api/price?symbol=${encodeURIComponent(symbol)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to fetch price.');
+    if (!(Number(data.lastPrice) > 0)) {
+      throw new Error(`Got an invalid price (${data.lastPrice}) for ${data.symbol} — leaving Entry price unchanged.`);
+    }
     el('entry').value = data.lastPrice;
     statusEl.textContent = `${data.symbol} last price: $${data.lastPrice} (MEXC Futures)`;
     statusEl.className = 'price-status ok';
@@ -530,9 +533,17 @@ async function fetchLiveBalance() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to fetch balance.');
     const usable = Number(data.availableOpen);
-    el('capital').value = usable.toFixed(2);
-    statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Futures)`;
-    statusEl.className = 'price-status ok';
+    if (usable > 0) {
+      el('capital').value = usable.toFixed(2);
+      statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Futures)`;
+      statusEl.className = 'price-status ok';
+    } else {
+      // $0 usable is common while a position is already open and margin is
+      // tied up — don't overwrite Total capital with a value that would
+      // break the calculator; just report the real number and move on.
+      statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT — too low to use as capital; Total capital left unchanged.`;
+      statusEl.className = 'price-status err';
+    }
   } catch (err) {
     statusEl.textContent = err.message || 'Could not fetch balance — enter it manually.';
     statusEl.className = 'price-status err';

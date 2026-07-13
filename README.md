@@ -207,5 +207,6 @@ It's also wired into `vercel.json` as the build step — `vercel` / `vercel --pr
 - Buy sizes grow geometrically (×1.26 per step); the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target.
 - Default drawdown coverage is 70%.
 - On page load and on Reset, the app automatically pulls the live MEXC price and your live usable balance (same as clicking "Get price" / "Get balance") before calculating, so the plan always starts from real numbers rather than the static fallback defaults (0.223 / $951) baked into the input fields.
+- If the auto-pulled usable balance comes back as $0 (common while a position is already open and margin is tied up) or the price comes back invalid, that field is left unchanged instead of being overwritten — a $0 capital would otherwise break the calculator's validation ("Entry price, leverage and capital must be positive").
 
 Testing auto-deploy
