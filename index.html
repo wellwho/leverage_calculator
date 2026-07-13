@@ -533,14 +533,20 @@ async function fetchLiveBalance() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to fetch balance.');
     const usable = Number(data.availableOpen);
-    if (usable > 0) {
-      el('capital').value = usable.toFixed(2);
+    // Compare against the *rounded* value we'd actually write into the
+    // field, not the raw one — a dust balance like $0.003 passes `> 0` but
+    // still rounds to "0.00", which broke the calculator just the same.
+    const usableRounded = Number(usable.toFixed(2));
+    const MIN_CAPITAL = 1; // $1 floor — anything below isn't a usable planning size anyway
+    if (usableRounded >= MIN_CAPITAL) {
+      el('capital').value = usableRounded.toFixed(2);
       statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Futures)`;
       statusEl.className = 'price-status ok';
     } else {
-      // $0 usable is common while a position is already open and margin is
-      // tied up — don't overwrite Total capital with a value that would
-      // break the calculator; just report the real number and move on.
+      // Near-$0 (or genuinely $0) usable is common while a position is
+      // already open and margin is tied up — don't overwrite Total capital
+      // with a value that would break the calculator; report the real
+      // number and leave the field as it was.
       statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT — too low to use as capital; Total capital left unchanged.`;
       statusEl.className = 'price-status err';
     }
