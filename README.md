@@ -12,7 +12,9 @@ One-page calculator for sizing a laddered leveraged DCA position (isolated margi
 - `api/status.js` — Vercel serverless function that reports whether a position is open and how the ladder's orders have filled
 - `login.html` — sign-in page
 - `api/login.js` / `api/logout.js` — issue/clear the session cookie
-- `middleware.mjs` — gates every route behind that session cookie
+- `middleware.mjs` — gates every route behind that session cookie (bypassed entirely in demo mode, see below)
+- `statusCalc.js` — P&L / projected-liquidation math (shared by `api/status.js` server-side and, in demo mode, by `index.html` client-side)
+- `api/config.js` — tells `index.html` whether this deployment is running in demo mode
 
 ## Deploy to Vercel — detailed walkthrough
 
@@ -182,6 +184,34 @@ vercel --prod
 - `middleware.mjs` runs on Vercel's Node.js runtime (not Edge) so it shares byte-for-byte the same HMAC signing code as `api/login.js` — no cross-runtime crypto mismatches.
 - "Log out" (top-right of the calculator) calls `api/logout.js`, which clears the cookie, then sends you back to `login.html`.
 - This is single-user auth (one shared username/password) — there's no user database, matching the fact that this deploys against one MEXC account.
+
+## Demo instance (shareable, no login, no real account)
+
+For showing the app to someone without giving them access to the real MEXC account behind the production URL, run a second Vercel project from this same repo in **demo mode**: no login wall, and every balance/position/order on the page is simulated in the visitor's own browser — nothing ever calls a real MEXC account endpoint.
+
+### What demo mode changes
+- `middleware.mjs` skips the login check entirely when `DEMO_MODE=true`, so the page loads directly with no session required.
+- "Get balance", "Execute plan", "Close position" and the Position Status card no longer call `api/balance.js` / `api/execute.js` / `api/status.js` / `api/close.js`. Instead, `index.html` simulates a fake account (starting balance $1,000) entirely client-side, storing the simulated position in the browser's `localStorage`. The same `statusCalc.js` math (P&L, projected liquidation) that the real deployment uses server-side runs client-side for the simulation, so the numbers behave identically.
+- The live price feed (`api/price.js`) still hits MEXC's real *public* ticker — that's not account data, so the demo shows genuine live market prices while everything account-related is fake.
+- A "DEMO MODE" banner appears at the top of the page, and "Log out" becomes "Reset demo" (clears the simulated position/balance back to a fresh $1,000).
+- Since nothing sensitive is ever touched, the demo project needs **no environment variables at all** — no `MEXC_API_KEY`, `MEXC_API_SECRET`, `APP_USERNAME`, `APP_PASSWORD`, or `SESSION_SECRET`. Just `DEMO_MODE=true`.
+
+### One-time setup
+In Terminal, from the `calculator` folder, link a **second, separate** Vercel project to the same repo (give it its own name so it gets its own `<name>.vercel.app` URL — same domain, different subdomain from production):
+```
+vercel link
+```
+When prompted, choose "no" to using the existing project and create a new one — e.g. name it `leveragecalculator-demo`. Then set the one env var it needs:
+```
+vercel env add DEMO_MODE
+```
+Type `true` when prompted, select all environments (Production/Preview/Development). Deploy it:
+```
+vercel --prod
+```
+Vercel will print the new project's URL (something like `https://leveragecalculator-demo.vercel.app`) — that's the link to share. Your existing production project/URL and its env vars are untouched; the two projects share the same GitHub repo and code but are otherwise completely independent.
+
+To push future code changes to both, just `git push` as usual — each Vercel project auto-deploys from the same branch independently.
 
 ## Local testing
 

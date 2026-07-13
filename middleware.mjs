@@ -58,6 +58,15 @@ function isValidSession(cookieHeader) {
 }
 
 export default function middleware(request) {
+  // Demo deployments (a separate Vercel project pointed at this same repo,
+  // with DEMO_MODE=true and none of the MEXC/session secrets set) have no
+  // account behind them to protect, so there's nothing to gate — skip auth
+  // entirely rather than lock everyone out of a project with no valid
+  // login configured. See README's "Demo instance" section.
+  if (process.env.DEMO_MODE === 'true') {
+    return next();
+  }
+
   const url = new URL(request.url);
 
   if (PUBLIC_PATHS.has(url.pathname)) {

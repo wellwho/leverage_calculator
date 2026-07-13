@@ -85,6 +85,18 @@
   }
   .danger-btn:hover { background: rgba(245,101,101,0.1); }
   .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .demo-banner {
+    display: none;
+    background: rgba(246,173,85,0.12);
+    border: 1px solid var(--accent2);
+    color: var(--accent2);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    text-align: center;
+  }
   .price-status { font-size: 12px; margin-top: 6px; min-height: 16px; }
   .price-status.ok { color: var(--green); }
   .price-status.err { color: var(--red); }
@@ -140,6 +152,8 @@
     </div>
     <button id="logoutBtn" class="secondary" style="flex: 0 0 auto; margin-top: 2px;">Log out</button>
   </div>
+
+  <div id="demoBanner" class="demo-banner">DEMO MODE — all balances, positions and orders on this page are simulated. No real MEXC account is connected and no real trades are ever placed.</div>
 
   <div class="card">
     <h2>Inputs</h2>
@@ -313,6 +327,7 @@
 </div>
 
 <script src="calc.js"></script>
+<script src="statusCalc.js"></script>
 <script>
 const fmt2 = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmt4 = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
@@ -327,6 +342,44 @@ const fmtPrice = (n) => {
 const el = (id) => document.getElementById(id);
 let lastPlan = null;
 
+// Demo mode — set via the DEMO_MODE env var on a *separate* Vercel project
+// pointed at this same repo (see README's "Demo instance" section). When
+// on, nothing on this page ever calls a real MEXC endpoint that needs
+// account access: balance/position/orders are simulated entirely in the
+// browser via localStorage, using the same math (statusCalc.js) as the
+// real Position Status card so the numbers behave identically.
+let demoMode = false;
+const DEMO_STORAGE_KEY = 'demoAccount';
+const DEMO_STARTING_BALANCE = 1000;
+
+function loadDemoAccount() {
+  try {
+    const raw = localStorage.getItem(DEMO_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // corrupt/old data — fall through to a fresh account
+  }
+  return { balance: DEMO_STARTING_BALANCE, position: null };
+}
+
+function saveDemoAccount(account) {
+  localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(account));
+}
+
+async function initDemoMode() {
+  try {
+    const res = await fetch('/api/config');
+    const data = await res.json();
+    demoMode = !!data.demoMode;
+  } catch {
+    demoMode = false; // fail closed to normal (live) behavior
+  }
+  el('demoBanner').style.display = demoMode ? 'block' : 'none';
+  if (demoMode) {
+    el('logoutBtn').textContent = 'Reset demo';
+  }
+}
+
 const toFuturesSymbol = (raw) => {
   const s = raw.trim().toUpperCase();
   return s.endsWith('_USDT') ? s : `${s}_USDT`;
@@ -336,81 +389,129 @@ const ORDER_STATE_LABEL = { 1: 'Pending', 2: 'Resting', 3: 'Filled', 4: 'Cancele
 const ORDER_STATE_COLOR = { 1: 'var(--muted)', 2: 'var(--accent2)', 3: 'var(--green)', 4: 'var(--muted)', 5: 'var(--red)' };
 const ORDER_TYPE_LABEL = { 1: 'Limit', 2: 'Post Only', 3: 'IOC', 4: 'FOK', 5: 'Market' };
 
-// Checks whether a position is currently open on MEXC for the symbol in the
-// Asset field, and switches the UI between the "plan calculator" state
-// (Execute card shown) and the "position status" state (fill list shown,
-// Execute hidden so a second ladder can't get deployed on top of a live one).
-async function checkPositionStatus() {
-  const symbol = toFuturesSymbol(el('symbol').value);
+// Renders the Position Status card from a status payload shaped like
+// api/status.js's response ({hasPosition, position, pnl, projectedLiquidation,
+// sinceTime, orders}). Shared by the real /api/status fetch path and the
+// demo-mode simulated path below, so both render identically.
+function renderPositionStatus(data) {
   const statusCard = el('statusCard');
   const executeCard = el('executeCard');
+
+  if (data.hasPosition && data.position) {
+    const p = data.position;
+    el('posAvgEntry').textContent = `$${fmtPrice(Number(p.holdAvgPrice))}`;
+    el('posQty').textContent = fmtQty(Number(p.holdVol));
+    el('posLeverage').textContent = `${p.leverage}x`;
+
+    const pnlDollarEl = el('posPnlDollar');
+    const pnlPercentEl = el('posPnlPercent');
+    if (data.pnl) {
+      const { dollar, percent } = data.pnl;
+      pnlDollarEl.textContent = `${dollar >= 0 ? '+' : ''}$${fmt2(dollar)}`;
+      pnlDollarEl.style.color = dollar >= 0 ? 'var(--green)' : 'var(--red)';
+      if (percent !== null) {
+        pnlPercentEl.textContent = `${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%`;
+        pnlPercentEl.style.color = percent >= 0 ? 'var(--green)' : 'var(--red)';
+      } else {
+        pnlPercentEl.textContent = 'n/a';
+        pnlPercentEl.style.color = '';
+      }
+    } else {
+      pnlDollarEl.textContent = 'n/a';
+      pnlPercentEl.textContent = 'n/a';
+      pnlDollarEl.style.color = '';
+      pnlPercentEl.style.color = '';
+    }
+
+    el('posLiq').textContent = data.projectedLiquidation !== null && data.projectedLiquidation !== undefined
+      ? `$${fmtPrice(Number(data.projectedLiquidation))}`
+      : 'n/a — could not compute';
+
+    const sinceLabel = el('sinceLabel');
+    if (data.sinceTime) {
+      sinceLabel.textContent = `Since ${new Date(data.sinceTime).toLocaleString()}`;
+      sinceLabel.className = 'price-status';
+    } else {
+      sinceLabel.textContent = 'Could not find the market buy that started this run — showing all orders found.';
+      sinceLabel.className = 'price-status err';
+    }
+
+    const tbody = document.querySelector('#statusTable tbody');
+    tbody.innerHTML = '';
+    (data.orders || []).forEach((o) => {
+      const tr = document.createElement('tr');
+      const stateLabel = ORDER_STATE_LABEL[o.state] || `State ${o.state}`;
+      const color = ORDER_STATE_COLOR[o.state] || 'var(--text)';
+      const qty = o.state === 3 ? o.dealVol : o.vol;
+      tr.innerHTML = `
+        <td style="text-align: left; color: ${color}; font-weight: 600;">${stateLabel}</td>
+        <td style="text-align: left;">${ORDER_TYPE_LABEL[o.orderType] || o.orderType}</td>
+        <td>$${fmtPrice(o.price)}</td>
+        <td>${fmtQty(qty)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    statusCard.style.display = '';
+    executeCard.style.display = 'none';
+  } else {
+    statusCard.style.display = 'none';
+    executeCard.style.display = '';
+  }
+}
+
+// Checks whether a position is currently open for the symbol in the Asset
+// field, and switches the UI between the "plan calculator" state (Execute
+// card shown) and the "position status" state (fill list shown, Execute
+// hidden so a second ladder can't get deployed on top of a live one). In
+// demo mode this reads the simulated position from localStorage instead of
+// calling MEXC, computing PnL/liquidation with the same statusCalc.js math
+// the server uses.
+async function checkPositionStatus() {
+  const symbol = toFuturesSymbol(el('symbol').value);
+
+  if (demoMode) {
+    const account = loadDemoAccount();
+    const position = account.position;
+    if (!position || position.symbol !== symbol) {
+      renderPositionStatus({ hasPosition: false });
+      return;
+    }
+    const currentPrice = Number(el('entry').value) || position.holdAvgPrice;
+    const pnl = computePnl({
+      holdAvgPrice: position.holdAvgPrice,
+      holdVol: position.holdVol,
+      contractSize: 1,
+      currentPrice,
+      im: position.im,
+      isLong: true,
+    });
+    const restingOrders = position.orders.filter((o) => o.state === 2);
+    const projectedLiquidation = computeProjectedLiquidation({
+      holdAvgPrice: position.holdAvgPrice,
+      holdVol: position.holdVol,
+      contractSize: 1,
+      im: position.im,
+      leverage: position.leverage,
+      mmr: position.mmr,
+      restingOrders,
+    });
+    renderPositionStatus({
+      hasPosition: true,
+      position: { holdAvgPrice: position.holdAvgPrice, holdVol: position.holdVol, leverage: position.leverage },
+      pnl: { ...pnl, currentPrice },
+      projectedLiquidation,
+      sinceTime: position.sinceTime,
+      orders: position.orders,
+    });
+    return;
+  }
 
   try {
     const res = await fetch(`/api/status?symbol=${encodeURIComponent(symbol)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Could not check position status.');
-
-    if (data.hasPosition && data.position) {
-      const p = data.position;
-      el('posAvgEntry').textContent = `$${fmtPrice(Number(p.holdAvgPrice))}`;
-      el('posQty').textContent = fmtQty(Number(p.holdVol));
-      el('posLeverage').textContent = `${p.leverage}x`;
-
-      const pnlDollarEl = el('posPnlDollar');
-      const pnlPercentEl = el('posPnlPercent');
-      if (data.pnl) {
-        const { dollar, percent } = data.pnl;
-        pnlDollarEl.textContent = `${dollar >= 0 ? '+' : ''}$${fmt2(dollar)}`;
-        pnlDollarEl.style.color = dollar >= 0 ? 'var(--green)' : 'var(--red)';
-        if (percent !== null) {
-          pnlPercentEl.textContent = `${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%`;
-          pnlPercentEl.style.color = percent >= 0 ? 'var(--green)' : 'var(--red)';
-        } else {
-          pnlPercentEl.textContent = 'n/a';
-          pnlPercentEl.style.color = '';
-        }
-      } else {
-        pnlDollarEl.textContent = 'n/a';
-        pnlPercentEl.textContent = 'n/a';
-        pnlDollarEl.style.color = '';
-        pnlPercentEl.style.color = '';
-      }
-
-      el('posLiq').textContent = data.projectedLiquidation !== null && data.projectedLiquidation !== undefined
-        ? `$${fmtPrice(Number(data.projectedLiquidation))}`
-        : 'n/a — could not compute';
-
-      const sinceLabel = el('sinceLabel');
-      if (data.sinceTime) {
-        sinceLabel.textContent = `Since ${new Date(data.sinceTime).toLocaleString()}`;
-        sinceLabel.className = 'price-status';
-      } else {
-        sinceLabel.textContent = 'Could not find the market buy that started this run — showing all orders found.';
-        sinceLabel.className = 'price-status err';
-      }
-
-      const tbody = document.querySelector('#statusTable tbody');
-      tbody.innerHTML = '';
-      (data.orders || []).forEach((o) => {
-        const tr = document.createElement('tr');
-        const stateLabel = ORDER_STATE_LABEL[o.state] || `State ${o.state}`;
-        const color = ORDER_STATE_COLOR[o.state] || 'var(--text)';
-        const qty = o.state === 3 ? o.dealVol : o.vol;
-        tr.innerHTML = `
-          <td style="text-align: left; color: ${color}; font-weight: 600;">${stateLabel}</td>
-          <td style="text-align: left;">${ORDER_TYPE_LABEL[o.orderType] || o.orderType}</td>
-          <td>$${fmtPrice(o.price)}</td>
-          <td>${fmtQty(qty)}</td>
-        `;
-        tbody.appendChild(tr);
-      });
-
-      statusCard.style.display = '';
-      executeCard.style.display = 'none';
-    } else {
-      statusCard.style.display = 'none';
-      executeCard.style.display = '';
-    }
+    renderPositionStatus(data);
   } catch (err) {
     // Don't block the calculator over a failed status check — just log it
     // and leave whichever card was already showing (defaults to Execute).
@@ -464,7 +565,10 @@ el('closeBtn').addEventListener('click', async () => {
   const tbody = table.querySelector('tbody');
 
   const symbol = toFuturesSymbol(el('symbol').value);
-  const ok = confirm(`Close the ENTIRE ${symbol} position and cancel ALL open orders on MEXC? This cannot be undone.`);
+  const confirmMsg = demoMode
+    ? `Close the simulated ${symbol} position and clear all simulated orders? This is a demo — nothing real happens.`
+    : `Close the ENTIRE ${symbol} position and cancel ALL open orders on MEXC? This cannot be undone.`;
+  const ok = confirm(confirmMsg);
   if (!ok) return;
 
   el('closeBtn').disabled = true;
@@ -472,6 +576,25 @@ el('closeBtn').addEventListener('click', async () => {
   statusEl.className = 'price-status pending';
   table.style.display = 'none';
   tbody.innerHTML = '';
+
+  if (demoMode) {
+    const account = loadDemoAccount();
+    account.position = null;
+    saveDemoAccount(account);
+    statusEl.textContent = `${symbol}: simulated orders canceled, position flat.`;
+    statusEl.className = 'price-status ok';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>Close position</td>
+      <td style="text-align: left;">All simulated orders</td>
+      <td style="color: var(--green); text-align: left;">Closed (simulated)</td>
+    `;
+    tbody.appendChild(tr);
+    table.style.display = '';
+    el('closeBtn').disabled = false;
+    await Promise.all([checkPositionStatus(), fetchLiveBalance()]);
+    return;
+  }
 
   try {
     const res = await fetch('/api/close', {
@@ -513,6 +636,11 @@ el('closeBtn').addEventListener('click', async () => {
 });
 
 el('logoutBtn').addEventListener('click', async () => {
+  if (demoMode) {
+    localStorage.removeItem(DEMO_STORAGE_KEY);
+    await Promise.all([fetchLiveBalance(), checkPositionStatus()]);
+    return;
+  }
   try {
     await fetch('/api/logout', { method: 'POST' });
   } catch {
@@ -528,6 +656,20 @@ async function fetchLiveBalance() {
   statusEl.textContent = 'Fetching…';
   statusEl.className = 'price-status pending';
   el('balanceBtn').disabled = true;
+
+  if (demoMode) {
+    // Simulated bankroll minus margin committed to any open simulated
+    // position — no MEXC account involved.
+    const account = loadDemoAccount();
+    const committed = account.position ? Number(account.position.im) : 0;
+    const available = Math.max(0, account.balance - committed);
+    el('capital').value = available.toFixed(2);
+    statusEl.textContent = `Simulated balance: $${fmt2(available)} (demo — no real account connected)`;
+    statusEl.className = 'price-status ok';
+    el('balanceBtn').disabled = false;
+    return;
+  }
+
   try {
     const res = await fetch('/api/balance?currency=USDT');
     const data = await res.json();
@@ -647,14 +789,65 @@ el('executeBtn').addEventListener('click', async () => {
   const leverage = parseFloat(el('leverage').value);
 
   const limitCount = orders.filter((o) => !o.market).length;
-  const ok = confirm(`Place 1 market buy + ${limitCount} limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x)? This uses real funds.`);
+  const confirmMsg = demoMode
+    ? `Simulate 1 market buy + ${limitCount} limit buy orders for ${symbol} (isolated, ${leverage}x)? This is a demo — no real funds or account involved.`
+    : `Place 1 market buy + ${limitCount} limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x)? This uses real funds.`;
+  const ok = confirm(confirmMsg);
   if (!ok) return;
 
   el('executeBtn').disabled = true;
-  statusEl.textContent = `Placing ${orders.length} orders…`;
+  statusEl.textContent = demoMode ? `Simulating ${orders.length} orders…` : `Placing ${orders.length} orders…`;
   statusEl.className = 'price-status pending';
   table.style.display = 'none';
   tbody.innerHTML = '';
+
+  if (demoMode) {
+    // Fill the market buy immediately, leave the rest resting — same shape
+    // as a real fresh Execute — and store it as this browser's simulated
+    // position. No network call, nothing touches MEXC.
+    const mmr = parseFloat(el('mmr').value) / 100;
+    const marketOrder = orders.find((o) => o.market);
+    const account = loadDemoAccount();
+    account.position = {
+      symbol,
+      holdAvgPrice: marketOrder.price,
+      holdVol: marketOrder.qty,
+      leverage,
+      mmr,
+      im: (marketOrder.price * marketOrder.qty) / leverage,
+      sinceTime: Date.now(),
+      orders: orders.map((o) => ({
+        orderId: `DEMO-${o.step}`,
+        price: o.price,
+        vol: o.qty,
+        dealVol: o.market ? o.qty : 0,
+        dealAvgPrice: o.market ? o.price : 0,
+        side: 1,
+        orderType: o.market ? 5 : 1,
+        state: o.market ? 3 : 2,
+        createTime: Date.now(),
+      })),
+    };
+    saveDemoAccount(account);
+
+    statusEl.textContent = `${orders.length}/${orders.length} orders simulated successfully.`;
+    statusEl.className = 'price-status ok';
+    orders.forEach((o) => {
+      const tr = document.createElement('tr');
+      const label = o.market ? 'Market' : 'Limit';
+      tr.innerHTML = `
+        <td>${o.step}</td>
+        <td>$${fmtPrice(o.price)}</td>
+        <td>${o.qty}</td>
+        <td style="color: var(--green); text-align: left;">${label} — order DEMO-${o.step} (simulated)</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    table.style.display = '';
+    el('executeBtn').disabled = false;
+    checkPositionStatus();
+    return;
+  }
 
   try {
     const res = await fetch('/api/execute', {
@@ -711,10 +904,12 @@ el('resetBtn').addEventListener('click', async () => {
   checkPositionStatus();
 });
 
-// On load: show the static defaults immediately, then pull live price +
-// balance and recalculate with real numbers, then check position status.
+// On load: show the static defaults immediately, then figure out whether
+// this deployment is running in demo mode, then pull live price + balance
+// (real or simulated) and recalculate, then check position status.
 el('calcBtn').click();
 (async () => {
+  await initDemoMode();
   await Promise.all([fetchLivePrice(), fetchLiveBalance()]);
   el('calcBtn').click();
   checkPositionStatus();
