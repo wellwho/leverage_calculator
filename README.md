@@ -9,6 +9,7 @@ One-page calculator for sizing a laddered leveraged DCA position (isolated margi
 - `api/execute.js` — Vercel serverless function that places the ladder's limit buy orders on MEXC Futures
 - `api/balance.js` — Vercel serverless function that fetches your available USDT futures balance
 - `api/close.js` — Vercel serverless function behind the "Close Position" panic button
+- `api/status.js` — Vercel serverless function that reports whether a position is open and how the ladder's orders have filled
 - `login.html` — sign-in page
 - `api/login.js` / `api/logout.js` — issue/clear the session cookie
 - `middleware.mjs` — gates every route behind that session cookie
@@ -130,6 +131,15 @@ The red "CLOSE POSITION" button in the Danger Zone card at the bottom calls `api
 This is deliberately scoped to **one symbol only**. MEXC also has an account-wide `/position/close_all` endpoint that takes no symbol and would close every open position across your whole account — it's intentionally not used here, since this app should only ever touch the pair you're looking at.
 
 Asks for a browser confirmation before doing anything, same as Execute.
+
+## Position Status (two app states)
+
+The page checks `api/status.js` for the current Asset on load, after fetching a price, and after Execute/Close — and switches between two states:
+
+- **No open position:** the ordinary plan calculator — inputs, Calculate, the theoretical ladder, and the "Execute plan on MEXC" card.
+- **Position open:** a "Position Status" card replaces the Execute card, showing the position's avg entry / size / leverage / liquidation price (straight from MEXC's `Get Open Positions`), plus every order for that symbol from `Get All Historical Orders` (unfiltered by state, so it covers resting, filled, canceled, and invalid orders in one call) — each row labeled Filled/Resting/Canceled/Invalid so it's clear how deep the ladder actually went. Execute is hidden in this state so a second ladder can't get deployed on top of a live one; Calculate above still works for previewing numbers only. A "Refresh status" button re-checks on demand.
+
+Requires the same `MEXC_API_KEY` / `MEXC_API_SECRET` as the rest of the MEXC integration, plus "View Order Details" (already needed for Close Position).
 
 ## Login
 
