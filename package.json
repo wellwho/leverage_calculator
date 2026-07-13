@@ -7,7 +7,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node test/backfill.test.js"
+    "test": "node test/backfill.test.js && node test/status-backfill.test.js"
   },
   "dependencies": {
     "@vercel/functions": "^3.7.5"

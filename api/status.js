@@ -22,6 +22,7 @@
 // GET /api/status?symbol=CRV_USDT
 
 const crypto = require('crypto');
+const { computePnl, computeProjectedLiquidation } = require('../statusCalc.js');
 
 const PRIVATE_BASE_URL = 'https://api.mexc.com';
 const CONTRACT_DETAIL_URL = 'https://contract.mexc.com/api/v1/contract/detail';
@@ -150,30 +151,20 @@ module.exports = async (req, res) => {
       const isLong = Number(position.positionType) === 1;
 
       if (contractSize && currentPrice) {
-        const qtyBase = holdVol * contractSize;
-        const dollar = (isLong ? currentPrice - holdAvgPrice : holdAvgPrice - currentPrice) * qtyBase;
-        const percent = im > 0 ? (dollar / im) * 100 : null;
+        const { dollar, percent } = computePnl({ holdAvgPrice, holdVol, contractSize, currentPrice, im, isLong });
         pnl = { dollar, percent, currentPrice };
       }
 
-      if (contractSize && mmr !== null && im > 0) {
-        const restingOrders = orders.filter((o) => o.state === 2); // still on the book
-        let qtyBase = holdVol * contractSize;
-        let notionalSum = holdAvgPrice * qtyBase;
-        let marginTotal = im;
-
-        restingOrders.forEach((o) => {
-          const oQtyBase = o.vol * contractSize;
-          notionalSum += o.price * oQtyBase;
-          qtyBase += oQtyBase;
-          marginTotal += (oQtyBase * o.price) / leverage;
-        });
-
-        if (qtyBase > 0) {
-          const projectedAvgEntry = notionalSum / qtyBase;
-          projectedLiquidation = projectedAvgEntry * (1 + mmr) - marginTotal / qtyBase;
-        }
-      }
+      const restingOrders = orders.filter((o) => o.state === 2); // still on the book
+      projectedLiquidation = computeProjectedLiquidation({
+        holdAvgPrice,
+        holdVol,
+        contractSize,
+        im,
+        leverage,
+        mmr,
+        restingOrders,
+      });
     } catch {
       // leave pnl / projectedLiquidation as null — position + orders are
       // still useful on their own.

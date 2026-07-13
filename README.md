@@ -193,13 +193,18 @@ This serves `index.html` and runs `api/price.js` locally so the "Get price" butt
 
 ## Backfill validation
 
-`test/backfill.test.js` checks `calc.js` against the proven reference plan (the 12-buy, $951, $0.223-entry plan). Run it any time you change `calc.js`:
+Two test files, both wired into `npm test`:
+
+- `test/backfill.test.js` checks `calc.js` (the ladder-sizing engine) against the proven reference plan (the 12-buy, $951, $0.223-entry plan).
+- `test/status-backfill.test.js` checks `statusCalc.js` — the P&L and projected-liquidation math shown on the Position Status card — against hand-computed, independently cross-checked fixtures (a loss scenario with resting orders, a zero-resting-orders case, a profitable long, and a profitable short).
+
+Run both any time you change `calc.js` or `statusCalc.js`:
 
 ```
 npm test
 ```
 
-It's also wired into `vercel.json` as the build step — `vercel` / `vercel --prod` runs it automatically and **aborts the deploy if it fails**, so a broken calculation engine can never go live.
+It's also wired into `vercel.json` as the build step — `vercel` / `vercel --prod` runs it automatically and **aborts the deploy if either test file fails**, so a broken calculation engine — ladder sizing or position math — can never go live.
 
 ## Notes
 - Fees and funding are ignored.
