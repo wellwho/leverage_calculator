@@ -241,8 +241,9 @@
         <div class="stat"><div class="label">Leverage</div><div class="value" id="posLeverage">—</div></div>
         <div class="stat"><div class="label">Liquidation ($)</div><div class="value liq" id="posLiq">—</div></div>
       </div>
-      <div class="calc-btn-row">
+      <div class="calc-btn-row" style="align-items: center;">
         <button id="refreshStatusBtn" class="secondary">Refresh status</button>
+        <span id="sinceLabel" class="price-status" style="margin-top: 0;"></span>
       </div>
       <div class="table-scroll">
         <table id="statusTable" style="margin-top: 10px;">
@@ -258,7 +259,7 @@
         </table>
       </div>
       <div class="note">
-        Live order list from MEXC for this symbol — "Filled" rows show how deep the ladder actually went; "Resting" ones are still on the book. While a position is open, "Execute plan on MEXC" is hidden below so you don't accidentally deploy a second ladder on top of it — the Calculate button above still works for previewing numbers only.
+        Orders since your last Execute — not the pair's full trading history. "Filled" rows show how deep this run's ladder actually went; "Resting" ones are still on the book. While a position is open, "Execute plan on MEXC" is hidden below so you don't accidentally deploy a second ladder on top of it — the Calculate button above still works for previewing numbers only.
       </div>
     </div>
 
@@ -355,6 +356,15 @@ async function checkPositionStatus() {
       el('posQty').textContent = fmtQty(Number(p.holdVol));
       el('posLeverage').textContent = `${p.leverage}x`;
       el('posLiq').textContent = `$${fmtPrice(Number(p.liquidatePrice))}`;
+
+      const sinceLabel = el('sinceLabel');
+      if (data.sinceTime) {
+        sinceLabel.textContent = `Since ${new Date(data.sinceTime).toLocaleString()}`;
+        sinceLabel.className = 'price-status';
+      } else {
+        sinceLabel.textContent = 'Could not find the market buy that started this run — showing all orders found.';
+        sinceLabel.className = 'price-status err';
+      }
 
       const tbody = document.querySelector('#statusTable tbody');
       tbody.innerHTML = '';
