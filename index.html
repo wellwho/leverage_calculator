@@ -237,7 +237,9 @@
         <div class="stat"><div class="label">Avg entry ($)</div><div class="value" id="posAvgEntry">—</div></div>
         <div class="stat"><div class="label">Position size</div><div class="value" id="posQty">—</div></div>
         <div class="stat"><div class="label">Leverage</div><div class="value" id="posLeverage">—</div></div>
-        <div class="stat"><div class="label">Liquidation ($)</div><div class="value liq" id="posLiq">—</div></div>
+        <div class="stat"><div class="label">Unrealized P&amp;L ($)</div><div class="value" id="posPnlDollar">—</div></div>
+        <div class="stat"><div class="label">Unrealized P&amp;L (%)</div><div class="value" id="posPnlPercent">—</div></div>
+        <div class="stat"><div class="label">Liq. if fully filled ($)</div><div class="value liq" id="posLiq">—</div></div>
       </div>
       <div class="calc-btn-row" style="align-items: center;">
         <button id="refreshStatusBtn" class="secondary">Refresh status</button>
@@ -353,7 +355,30 @@ async function checkPositionStatus() {
       el('posAvgEntry').textContent = `$${fmtPrice(Number(p.holdAvgPrice))}`;
       el('posQty').textContent = fmtQty(Number(p.holdVol));
       el('posLeverage').textContent = `${p.leverage}x`;
-      el('posLiq').textContent = `$${fmtPrice(Number(p.liquidatePrice))}`;
+
+      const pnlDollarEl = el('posPnlDollar');
+      const pnlPercentEl = el('posPnlPercent');
+      if (data.pnl) {
+        const { dollar, percent } = data.pnl;
+        pnlDollarEl.textContent = `${dollar >= 0 ? '+' : ''}$${fmt2(dollar)}`;
+        pnlDollarEl.style.color = dollar >= 0 ? 'var(--green)' : 'var(--red)';
+        if (percent !== null) {
+          pnlPercentEl.textContent = `${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%`;
+          pnlPercentEl.style.color = percent >= 0 ? 'var(--green)' : 'var(--red)';
+        } else {
+          pnlPercentEl.textContent = 'n/a';
+          pnlPercentEl.style.color = '';
+        }
+      } else {
+        pnlDollarEl.textContent = 'n/a';
+        pnlPercentEl.textContent = 'n/a';
+        pnlDollarEl.style.color = '';
+        pnlPercentEl.style.color = '';
+      }
+
+      el('posLiq').textContent = data.projectedLiquidation !== null && data.projectedLiquidation !== undefined
+        ? `$${fmtPrice(Number(data.projectedLiquidation))}`
+        : 'n/a — could not compute';
 
       const sinceLabel = el('sinceLabel');
       if (data.sinceTime) {

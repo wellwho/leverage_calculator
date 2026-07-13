@@ -8,11 +8,24 @@
 // so a re-deploy on the same symbol doesn't drag old, already-closed runs
 // into the list.
 //
+// Also computes, when a position is open:
+//   - pnl: unrealized P&L in $ and % of currently-committed margin, using
+//     the live ticker price against the position's own avg entry.
+//   - projectedLiquidation: NOT MEXC's current liquidatePrice (that only
+//     reflects what has actually filled so far) — this projects the
+//     liquidation price assuming every still-resting order in the scoped
+//     list also fills, starting from the position's real, live `im`
+//     (initial margin), which already reflects any margin added manually
+//     in the MEXC app. So this is a real-time "if the whole ladder fills"
+//     number, not a stale plan-time calculation.
+//
 // GET /api/status?symbol=CRV_USDT
 
 const crypto = require('crypto');
 
 const PRIVATE_BASE_URL = 'https://api.mexc.com';
+const CONTRACT_DETAIL_URL = 'https://contract.mexc.com/api/v1/contract/detail';
+const TICKER_URL = 'https://contract.mexc.com/api/v1/contract/ticker';
 
 function sign(secretKey, accessKey, timestamp, paramString) {
   return crypto.createHmac('sha256', secretKey).update(accessKey + timestamp + paramString).digest('hex');
@@ -112,5 +125,60 @@ module.exports = async (req, res) => {
     // orders stays []
   }
 
-  res.status(200).json({ hasPosition: !!position, position, orders, sinceTime });
+  // Unrealized P&L and the "if fully filled" projected liquidation price —
+  // both real-time, both only computed when there's actually a position.
+  let pnl = null;
+  let projectedLiquidation = null;
+
+  if (position) {
+    try {
+      const [detailRes, tickerRes] = await Promise.all([
+        fetch(`${CONTRACT_DETAIL_URL}?symbol=${encodeURIComponent(symbol)}`),
+        fetch(`${TICKER_URL}?symbol=${encodeURIComponent(symbol)}`),
+      ]);
+      const detail = await detailRes.json();
+      const ticker = await tickerRes.json();
+
+      const contractSize = detail && detail.success && detail.data ? Number(detail.data.contractSize) : null;
+      const mmr = detail && detail.success && detail.data ? Number(detail.data.maintenanceMarginRate) : null;
+      const currentPrice = ticker && ticker.success && ticker.data ? Number(ticker.data.lastPrice) : null;
+
+      const holdAvgPrice = Number(position.holdAvgPrice);
+      const holdVol = Number(position.holdVol); // contracts
+      const im = Number(position.im); // current total margin — reflects manual top-ups
+      const leverage = Number(position.leverage) || 1;
+      const isLong = Number(position.positionType) === 1;
+
+      if (contractSize && currentPrice) {
+        const qtyBase = holdVol * contractSize;
+        const dollar = (isLong ? currentPrice - holdAvgPrice : holdAvgPrice - currentPrice) * qtyBase;
+        const percent = im > 0 ? (dollar / im) * 100 : null;
+        pnl = { dollar, percent, currentPrice };
+      }
+
+      if (contractSize && mmr !== null && im > 0) {
+        const restingOrders = orders.filter((o) => o.state === 2); // still on the book
+        let qtyBase = holdVol * contractSize;
+        let notionalSum = holdAvgPrice * qtyBase;
+        let marginTotal = im;
+
+        restingOrders.forEach((o) => {
+          const oQtyBase = o.vol * contractSize;
+          notionalSum += o.price * oQtyBase;
+          qtyBase += oQtyBase;
+          marginTotal += (oQtyBase * o.price) / leverage;
+        });
+
+        if (qtyBase > 0) {
+          const projectedAvgEntry = notionalSum / qtyBase;
+          projectedLiquidation = projectedAvgEntry * (1 + mmr) - marginTotal / qtyBase;
+        }
+      }
+    } catch {
+      // leave pnl / projectedLiquidation as null — position + orders are
+      // still useful on their own.
+    }
+  }
+
+  res.status(200).json({ hasPosition: !!position, position, orders, sinceTime, pnl, projectedLiquidation });
 };
