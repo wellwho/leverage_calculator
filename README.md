@@ -148,6 +148,8 @@ The page checks `api/status.js` for the current Asset on load, after fetching a 
 
   **"Liq. if fully filled" price:** deliberately *not* MEXC's `liquidatePrice`, which only reflects what has actually filled so far. Instead, starting from the position's real, current `im`, avg entry, and size, this walks forward through every still-**resting** order in the scoped list, accumulates the margin each would add (`vol × contractSize × price ÷ leverage`, using the position's real leverage) and the resulting weighted avg entry, then reapplies the same isolated-margin liquidation formula used elsewhere in this app (`Avg Entry × (1 + MMR) − Total Margin ÷ Quantity`, MMR from the contract spec). Because it starts from live `im`, a manual margin top-up is picked up automatically on the next refresh.
 
+  **"Avg entry if filled" column (per order row):** a running cumulative average, computed client-side in `index.html` straight from the scoped orders list — since it's already sorted highest-price-first, which is exactly fill order for a DCA-down ladder, walking down it and accumulating `qty × price` (using each order's real `dealVol`/`dealAvgPrice` once filled, or its resting `vol`/`price` before that) reconstructs "what the position average would be if this row, and everything above it, has filled" at every rung. Canceled/invalid orders are skipped — they never will fill, so they don't contribute — and show as "—".
+
 Requires the same `MEXC_API_KEY` / `MEXC_API_SECRET` as the rest of the MEXC integration, plus "View Order Details" (already needed for Close Position).
 
 ## Login

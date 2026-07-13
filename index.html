@@ -267,13 +267,14 @@
               <th>Type</th>
               <th>Price ($)</th>
               <th>Qty</th>
+              <th>Avg entry if filled ($)</th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
       <div class="note">
-        Orders since your last Execute — not the pair's full trading history. "Filled" rows show how deep this run's ladder actually went; "Resting" ones are still on the book. While a position is open, "Execute plan on MEXC" is hidden below so you don't accidentally deploy a second ladder on top of it — the Calculate button above still works for previewing numbers only.
+        Orders since your last Execute — not the pair's full trading history. "Filled" rows show how deep this run's ladder actually went; "Resting" ones are still on the book. "Avg entry if filled" is the running position average as if every order down to that row has triggered — a cumulative preview of where your average lands at each rung, same idea as the Ladder table's Avg entry column but built from these real orders. Canceled/invalid orders don't contribute and show "—". While a position is open, "Execute plan on MEXC" is hidden below so you don't accidentally deploy a second ladder on top of it — the Calculate button above still works for previewing numbers only.
       </div>
     </div>
 
@@ -438,16 +439,32 @@ function renderPositionStatus(data) {
 
     const tbody = document.querySelector('#statusTable tbody');
     tbody.innerHTML = '';
+    // Orders arrive highest-price-first (Buy #1 first, then descending down
+    // the ladder), which is exactly fill order for a DCA-down ladder, so a
+    // running accumulator over this same list reconstructs "average entry
+    // if this row and everything above it has filled" per row.
+    let cumQty = 0;
+    let cumNotional = 0;
     (data.orders || []).forEach((o) => {
       const tr = document.createElement('tr');
       const stateLabel = ORDER_STATE_LABEL[o.state] || `State ${o.state}`;
       const color = ORDER_STATE_COLOR[o.state] || 'var(--text)';
       const qty = o.state === 3 ? o.dealVol : o.vol;
+
+      let cumAvgCell = '—';
+      if (o.state !== 4 && o.state !== 5) { // canceled/invalid never fill — don't contribute
+        const fillPrice = o.state === 3 ? o.dealAvgPrice : o.price;
+        cumQty += qty;
+        cumNotional += qty * fillPrice;
+        if (cumQty > 0) cumAvgCell = `$${fmtPrice(cumNotional / cumQty)}`;
+      }
+
       tr.innerHTML = `
         <td style="text-align: left; color: ${color}; font-weight: 600;">${stateLabel}</td>
         <td style="text-align: left;">${ORDER_TYPE_LABEL[o.orderType] || o.orderType}</td>
         <td>$${fmtPrice(o.price)}</td>
         <td>${fmtQty(qty)}</td>
+        <td>${cumAvgCell}</td>
       `;
       tbody.appendChild(tr);
     });
