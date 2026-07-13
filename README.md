@@ -99,7 +99,7 @@ If you own a domain name: in your browser go to vercel.com, log in, open this pr
 
 ## Execute plan on MEXC (auto-place orders)
 
-The "Execute" card at the bottom of the calculated plan places every "Limit Buy" row as an isolated-margin, open-long limit order on MEXC Futures via `api/execute.js`. The "Add Margin" step is intentionally **not** automated — MEXC only lets you add margin to a position that already exists, which means it needs a position ID that doesn't exist until Buy #1 fills. Add that margin yourself in the MEXC app once you see the fill, using the dollar amount already shown in the ladder table.
+The "Execute" card at the bottom of the calculated plan places every "Limit Buy" row as an isolated-margin, open-long limit order on MEXC Futures via `api/execute.js`, then automatically adds whatever capital is left over directly to the position as margin.
 
 ### One-time setup
 
@@ -117,6 +117,7 @@ The "Execute" card at the bottom of the calculated plan places every "Limit Buy"
 - Buy #1 is placed as a **market** order (fills immediately at the live price); every other buy is a **limit** order resting at its ladder price. This is a display/execution-layer choice only — `calc.js`'s sizing math is unaffected.
 - Places each order sequentially with ~550ms spacing to stay under MEXC's order-placement rate limit (4 requests / 2s).
 - Shows a per-order result (order ID or the specific MEXC error) once all orders have been submitted.
+- **Adds the remaining margin automatically.** After every order has been placed, `api/execute.js` sums up what was *actually* committed — using each order's real, exchange-rounded price × contract count, not the plan's theoretical numbers, since MEXC's `contractSize`/`volScale`/`minVol` rounding means the orders that land rarely cost exactly what the plan predicted — and subtracts that from the "Total capital" you entered. Whatever's left gets sent to MEXC's `position/change_margin` endpoint (`type: 1`, increase) and attached directly to the position. This needs the position's `positionId`, which only exists after Buy #1 has filled, so it polls `position/open_positions` (up to 6 tries, 500ms apart) before giving up — by the time every ladder order has been placed this has almost always already happened, so the poll is mostly a safety net. If the remainder is negative (orders somehow cost more than the provided capital) or under a $0.01 floor, the step is skipped and reported as such rather than attempted. No extra API key permission is needed — `change_margin` uses the same **Futures → Order Placing** permission as order creation.
 - Asks for a browser confirmation before sending anything — no orders go out on an accidental click.
 
 ## Pull available funds from MEXC

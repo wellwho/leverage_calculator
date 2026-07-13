@@ -297,7 +297,7 @@
         </table>
       </div>
       <div class="note">
-        Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). The "Add Margin" step is not automated — add that margin yourself in the MEXC app once Buy #1 fills, using the amount shown in the table above.
+        Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). As a last step, whatever of "Total capital" wasn't actually committed to a placed order gets added directly to the position as margin — computed from each order's real, exchange-rounded fill size rather than the plan's theoretical numbers, so it accounts for MEXC's contract-size rounding automatically.
       </div>
     </div>
   </div>
@@ -788,10 +788,11 @@ el('executeBtn').addEventListener('click', async () => {
   const symbol = toFuturesSymbol(el('symbol').value);
   const leverage = parseFloat(el('leverage').value);
 
+  const capital = parseFloat(el('capital').value);
   const limitCount = orders.filter((o) => !o.market).length;
   const confirmMsg = demoMode
-    ? `Simulate 1 market buy + ${limitCount} limit buy orders for ${symbol} (isolated, ${leverage}x)? This is a demo — no real funds or account involved.`
-    : `Place 1 market buy + ${limitCount} limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x)? This uses real funds.`;
+    ? `Simulate 1 market buy + ${limitCount} limit buy orders for ${symbol} (isolated, ${leverage}x), then simulate adding whatever capital is left over as margin? This is a demo — no real funds or account involved.`
+    : `Place 1 market buy + ${limitCount} limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x), then add whatever capital is left over directly to the position as margin? This uses real funds.`;
   const ok = confirm(confirmMsg);
   if (!ok) return;
 
@@ -804,9 +805,16 @@ el('executeBtn').addEventListener('click', async () => {
   if (demoMode) {
     // Fill the market buy immediately, leave the rest resting — same shape
     // as a real fresh Execute — and store it as this browser's simulated
-    // position. No network call, nothing touches MEXC.
+    // position. No network call, nothing touches MEXC. Mirrors the real
+    // backend's remaining-capital margin step: whatever of `capital` isn't
+    // committed to the (simulated) orders above gets added straight to the
+    // simulated position's margin.
     const mmr = parseFloat(el('mmr').value) / 100;
     const marketOrder = orders.find((o) => o.market);
+    const committedMargin = orders.reduce((sum, o) => sum + (o.price * o.qty) / leverage, 0);
+    const remaining = Math.max(0, (capital || 0) - committedMargin);
+    const marketMargin = (marketOrder.price * marketOrder.qty) / leverage;
+
     const account = loadDemoAccount();
     account.position = {
       symbol,
@@ -814,7 +822,7 @@ el('executeBtn').addEventListener('click', async () => {
       holdVol: marketOrder.qty,
       leverage,
       mmr,
-      im: (marketOrder.price * marketOrder.qty) / leverage,
+      im: marketMargin + remaining,
       sinceTime: Date.now(),
       orders: orders.map((o) => ({
         orderId: `DEMO-${o.step}`,
@@ -830,7 +838,7 @@ el('executeBtn').addEventListener('click', async () => {
     };
     saveDemoAccount(account);
 
-    statusEl.textContent = `${orders.length}/${orders.length} orders simulated successfully.`;
+    statusEl.textContent = `${orders.length}/${orders.length} orders simulated successfully. $${fmt2(remaining)} added as margin (simulated).`;
     statusEl.className = 'price-status ok';
     orders.forEach((o) => {
       const tr = document.createElement('tr');
@@ -843,6 +851,14 @@ el('executeBtn').addEventListener('click', async () => {
       `;
       tbody.appendChild(tr);
     });
+    const marginTr = document.createElement('tr');
+    marginTr.innerHTML = `
+      <td>Add Margin</td>
+      <td>$${fmt2(remaining)}</td>
+      <td>—</td>
+      <td style="color: var(--green); text-align: left;">Added to position (simulated)</td>
+    `;
+    tbody.appendChild(marginTr);
     table.style.display = '';
     el('executeBtn').disabled = false;
     checkPositionStatus();
@@ -853,14 +869,22 @@ el('executeBtn').addEventListener('click', async () => {
     const res = await fetch('/api/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, leverage, orders }),
+      body: JSON.stringify({ symbol, leverage, capital, orders }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Execution failed.');
 
     const successCount = data.results.filter((r) => r.success).length;
     statusEl.textContent = `${successCount}/${data.results.length} orders placed successfully.`;
-    statusEl.className = successCount === data.results.length ? 'price-status ok' : 'price-status err';
+    if (data.marginAdd && data.marginAdd.attempted) {
+      statusEl.textContent += data.marginAdd.success
+        ? ` $${fmt2(data.marginAdd.amount)} added as margin.`
+        : ` Margin add failed — add $${fmt2(data.marginAdd.amount)} manually in the MEXC app.`;
+    } else if (data.marginAdd && data.marginAdd.reason) {
+      statusEl.textContent += ` Margin step skipped: ${data.marginAdd.reason}`;
+    }
+    const allOk = successCount === data.results.length && (!data.marginAdd || data.marginAdd.attempted === false || data.marginAdd.success);
+    statusEl.className = allOk ? 'price-status ok' : 'price-status err';
 
     data.results.forEach((r) => {
       const tr = document.createElement('tr');
@@ -873,6 +897,28 @@ el('executeBtn').addEventListener('click', async () => {
       `;
       tbody.appendChild(tr);
     });
+    if (data.marginAdd) {
+      const m = data.marginAdd;
+      const tr = document.createElement('tr');
+      let resultText, color;
+      if (!m.attempted) {
+        resultText = m.reason || 'Skipped';
+        color = 'var(--muted)';
+      } else if (m.success) {
+        resultText = `Added to position${m.positionId ? ` (${m.positionId})` : ''}`;
+        color = 'var(--green)';
+      } else {
+        resultText = m.error || 'Failed';
+        color = 'var(--red)';
+      }
+      tr.innerHTML = `
+        <td>Add Margin</td>
+        <td>${m.amount === null || m.amount === undefined ? '—' : `$${fmt2(m.amount)}`}</td>
+        <td>—</td>
+        <td style="color: ${color}; text-align: left;">${resultText}</td>
+      `;
+      tbody.appendChild(tr);
+    }
     table.style.display = '';
   } catch (err) {
     statusEl.textContent = err.message || 'Execution failed.';
