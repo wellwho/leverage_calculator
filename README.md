@@ -201,5 +201,7 @@ It's also wired into `vercel.json` as the build step — `vercel` / `vercel --pr
 - Fees and funding are ignored.
 - Liquidation price formula: `Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity` (MEXC isolated margin).
 - Buy sizes grow geometrically (×1.26 per step); the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target.
+- Default drawdown coverage is 70%.
+- On page load and on Reset, the app automatically pulls the live MEXC price and your live usable balance (same as clicking "Get price" / "Get balance") before calculating, so the plan always starts from real numbers rather than the static fallback defaults (0.223 / $951) baked into the input fields.
 
 Testing auto-deploy

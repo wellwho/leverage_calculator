@@ -71,21 +71,19 @@
   button:hover { opacity: 0.88; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   button.secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
-  .danger-card { border-color: var(--red); }
-  .danger-card h2 { color: var(--red); }
+  .danger-card { border-color: var(--border); }
+  .danger-card h2 { color: var(--muted); }
   .danger-btn {
-    width: 100%;
-    background: var(--red);
-    color: #fff;
-    border: none;
-    padding: 20px 20px;
-    border-radius: 8px;
-    font-size: 22px;
-    font-weight: 800;
-    letter-spacing: 0.06em;
+    background: transparent;
+    color: var(--red);
+    border: 1px solid var(--red);
+    padding: 9px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
   }
-  .danger-btn:hover { opacity: 0.88; }
+  .danger-btn:hover { background: rgba(245,101,101,0.1); }
   .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .price-status { font-size: 12px; margin-top: 6px; min-height: 16px; }
   .price-status.ok { color: var(--green); }
@@ -178,7 +176,7 @@
       </div>
       <div>
         <label for="targetDrawdown">Drawdown coverage (%)</label>
-        <input id="targetDrawdown" type="number" step="any" min="1" max="99" value="95" />
+        <input id="targetDrawdown" type="number" step="any" min="1" max="99" value="70" />
       </div>
       <div>
         <label for="mmr">Maintenance margin rate (%)</label>
@@ -293,7 +291,7 @@
     <div class="note" style="margin-top: 0; padding-top: 0; border-top: none; margin-bottom: 16px;">
       Cancels every open order and flash-closes any open position on the asset entered above, at market, on MEXC. This is account-flattening for that one symbol only — it cannot be undone.
     </div>
-    <button id="closeBtn" class="danger-btn">CLOSE POSITION</button>
+    <button id="closeBtn" class="danger-btn">Close position</button>
     <div id="closeStatus" class="price-status" style="margin-top: 10px;"></div>
     <div class="table-scroll">
       <table id="closeTable" style="display: none; margin-top: 10px;">
@@ -395,7 +393,9 @@ async function checkPositionStatus() {
   }
 }
 
-el('fetchBtn').addEventListener('click', async () => {
+// Pulls the live MEXC price into the Entry field. Shared by the "Get price"
+// button and the automatic page-load / Reset refresh.
+async function fetchLivePrice() {
   const symRaw = el('symbol').value.trim().toUpperCase();
   if (!symRaw) return;
   const symbol = symRaw.endsWith('_USDT') ? symRaw : `${symRaw}_USDT`;
@@ -416,6 +416,10 @@ el('fetchBtn').addEventListener('click', async () => {
   } finally {
     el('fetchBtn').disabled = false;
   }
+}
+
+el('fetchBtn').addEventListener('click', async () => {
+  await fetchLivePrice();
   checkPositionStatus();
 });
 
@@ -489,7 +493,9 @@ el('logoutBtn').addEventListener('click', async () => {
   window.location.href = '/login.html';
 });
 
-el('balanceBtn').addEventListener('click', async () => {
+// Pulls the live MEXC usable balance into the Total capital field. Shared
+// by the "Get balance" button and the automatic page-load / Reset refresh.
+async function fetchLiveBalance() {
   const statusEl = el('balanceStatus');
   statusEl.textContent = 'Fetching…';
   statusEl.className = 'price-status pending';
@@ -508,7 +514,9 @@ el('balanceBtn').addEventListener('click', async () => {
   } finally {
     el('balanceBtn').disabled = false;
   }
-});
+}
+
+el('balanceBtn').addEventListener('click', fetchLiveBalance);
 
 el('calcBtn').addEventListener('click', () => {
   const errorBox = el('errorBox');
@@ -640,11 +648,11 @@ el('executeBtn').addEventListener('click', async () => {
   checkPositionStatus();
 });
 
-el('resetBtn').addEventListener('click', () => {
+el('resetBtn').addEventListener('click', async () => {
   el('symbol').value = 'CRV';
   el('entry').value = '0.223';
   el('numBuys').value = '12';
-  el('targetDrawdown').value = '95';
+  el('targetDrawdown').value = '70';
   el('capital').value = '951';
   el('leverage').value = '5';
   el('mmr').value = '1';
@@ -656,12 +664,19 @@ el('resetBtn').addEventListener('click', () => {
   el('execTable').style.display = 'none';
   el('results').style.display = 'none';
   lastPlan = null;
+  await Promise.all([fetchLivePrice(), fetchLiveBalance()]);
+  el('calcBtn').click();
   checkPositionStatus();
 });
 
-// auto-run once on load with the defaults
+// On load: show the static defaults immediately, then pull live price +
+// balance and recalculate with real numbers, then check position status.
 el('calcBtn').click();
-checkPositionStatus();
+(async () => {
+  await Promise.all([fetchLivePrice(), fetchLiveBalance()]);
+  el('calcBtn').click();
+  checkPositionStatus();
+})();
 </script>
 </body>
 </html>
