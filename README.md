@@ -1,20 +1,36 @@
-# Leveraged DCA Ladder Calculator
+# Leveraged / Spot DCA Ladder Calculator
 
-One-page calculator for sizing a laddered leveraged DCA position (isolated margin, long) against a target drawdown-before-liquidation. Live entry price pulled from MEXC Futures.
+One-page calculator for sizing a laddered DCA position, in two modes switchable by tab:
+
+- **Leveraged** — isolated margin, long, on MEXC Futures, sized against a target drawdown-before-liquidation.
+- **Spot DCA** — the same laddered-buy math, no leverage, no margin, no liquidation, on MEXC Spot. Uses the exact same trigger prices as the Leveraged tab for the same inputs, so the two are directly comparable — see "Spot DCA mode" below for why they're not equivalent in outcome despite sharing a ladder shape.
+
+Live entry price pulled from MEXC (Futures ticker for the Leveraged tab, Spot ticker for the Spot tab).
 
 ## Files
-- `index.html` — UI (inputs + results table)
-- `calc.js` — calculation engine (shared by the browser and tested via Node)
-- `api/price.js` — Vercel serverless function that proxies MEXC's futures ticker (avoids browser CORS)
-- `api/execute.js` — Vercel serverless function that places the ladder's limit buy orders on MEXC Futures
-- `api/balance.js` — Vercel serverless function that fetches your available USDT futures balance
-- `api/close.js` — Vercel serverless function behind the "Close Position" panic button
-- `api/status.js` — Vercel serverless function that reports whether a position is open and how the ladder's orders have filled
+- `index.html` — UI (inputs + results table), with a Leveraged/Spot tab switch
+- `calc.js` — calculation engine: `computePlan` (leveraged) and `computeSpotPlan` (spot), sharing a `buildLadderShape` helper so both tabs trigger at identical prices for the same inputs
+- `statusCalc.js` — P&L / projected-liquidation math (shared by `api/status.js` server-side and, in demo mode, by `index.html` client-side)
+- `api/config.js` — tells `index.html` whether this deployment is running in demo mode
+
+### Leveraged (MEXC Futures)
+- `api/price.js` — proxies MEXC's futures ticker (avoids browser CORS)
+- `api/execute.js` — places the ladder's limit buy orders on MEXC Futures, then adds leftover capital as margin
+- `api/balance.js` — fetches your available USDT futures balance
+- `api/close.js` — behind the "Close Position" panic button
+- `api/status.js` — reports whether a position is open and how the ladder's orders have filled
+
+### Spot (MEXC Spot)
+- `api/spot-price.js` — proxies MEXC's spot ticker
+- `api/spot-execute.js` — places the ladder's buy orders on MEXC Spot (no leverage/margin)
+- `api/spot-balance.js` — fetches your available USDT spot balance
+- `api/spot-close.js` — behind the "Close Position" button in Spot mode
+- `api/spot-status.js` — reports fill status for the current run's orders (spot has no unified "position" object, so this is reconstructed from order fills)
+
+### Auth
 - `login.html` — sign-in page
 - `api/login.js` / `api/logout.js` — issue/clear the session cookie
 - `middleware.mjs` — gates every route behind that session cookie (bypassed entirely in demo mode, see below)
-- `statusCalc.js` — P&L / projected-liquidation math (shared by `api/status.js` server-side and, in demo mode, by `index.html` client-side)
-- `api/config.js` — tells `index.html` whether this deployment is running in demo mode
 
 ## Deploy to Vercel — detailed walkthrough
 
@@ -152,6 +168,35 @@ The page checks `api/status.js` for the current Asset on load, after fetching a 
 
 Requires the same `MEXC_API_KEY` / `MEXC_API_SECRET` as the rest of the MEXC integration, plus "View Order Details" (already needed for Close Position).
 
+## Spot DCA mode
+
+The **Spot DCA** tab runs the same laddered-buy idea with no leverage, no margin, and no liquidation, executing on MEXC Spot instead of Futures. `computeSpotPlan` (in `calc.js`) shares its trigger-price math with the leveraged `computePlan` via a common `buildLadderShape` helper, so entering the same entry price / buy count / drawdown coverage on either tab produces buys at identical prices — only the sizing (leveraged solves for a liquidation-safe `E1`; spot just splits `capital` across the ladder) and the risk profile differ.
+
+### One-time setup
+
+The Spot tab reuses the **same** `MEXC_API_KEY` / `MEXC_API_SECRET` env vars as the Leveraged tab — no new env vars to add. The one manual step is on MEXC's side: your API key needs **Spot trading permission** enabled in addition to whatever Futures permissions it already has (MEXC website → API Management → edit the key → enable "Spot Trading"). Nothing here needs KYC beyond what Futures already required.
+
+### API differences from Futures (why there's a separate set of `api/spot-*.js` files)
+
+MEXC Spot v3 is a different API surface from Futures, not just a different symbol format:
+
+- **Auth**: header `X-MEXC-APIKEY` (not the Futures `ApiKey`/`Request-Time`/`Signature` triplet), and the signature is `HMAC-SHA256(secretKey, paramString)` over the exact, unsorted query string / form body sent — not a JSON payload.
+- **Symbols have no separator** — `CRVUSDT`, not `CRV_USDT`.
+- **Order precision** comes from flat `baseAssetPrecision` / `quotePrecision` fields on `GET /api/v3/exchangeInfo` (MEXC's spot API doesn't document a Binance-style `LOT_SIZE`/`PRICE_FILTER` filter list).
+- **Market buys spend an exact dollar amount** via `quoteOrderQty` rather than a pre-computed base quantity, so the first ladder rung always costs exactly what the plan says regardless of the instant of execution.
+- **Order-history lookback is capped at 7 days** (`GET /api/v3/allOrders`) — unlike the Futures integration's `history_orders` endpoint, which has no such limit. A deployment left running longer than a week without a fresh Execute would lose visibility into that run's early orders in the Position Status card.
+- MEXC's published Spot docs left some details unconfirmed (the full order-status enum beyond `NEW`/`CANCELED`, and one inconsistent `LIMIT`/`LIMIT_ORDER` example). `api/spot-status.js` sidesteps this by classifying fills from `executedQty` vs `origQty` — fields confirmed everywhere in the docs — rather than trusting an exact status string.
+
+### What each endpoint does
+- `api/spot-price.js` / `api/spot-balance.js` — live price and available USDT, same role as `api/price.js` / `api/balance.js`.
+- `api/spot-execute.js` — places buy #1 as a market order (`quoteOrderQty`) and every other rung as a resting limit order, 550ms apart. After all orders are placed it reports `leftoverCapital` (planned capital minus what was actually committed) as an **informational line only** — unlike the Leveraged tab, this is not auto-deployed anywhere, since spot has no margin concept to add it to.
+- `api/spot-status.js` — maps MEXC Spot orders into the exact same shape/encoding the Futures integration uses (`state`: resting/filled/canceled, `orderType`: limit/market), so the existing Position Status card — including the cumulative "avg entry if filled" column — renders Spot runs with zero extra UI code. Reconstructs "position" (avg entry, size) from filled orders directly, since spot has no unified position object the way Futures does. P&L % is computed against cost basis (price × filled qty) standing in for margin, since there's no leverage to divide by.
+- `api/spot-close.js` — the Spot tab's "Close Position": cancels every resting order on the symbol, then market-sells the **entire free balance** of the base asset back to USDT. Like the Futures panic button, this flattens the whole symbol, not just the current run.
+
+### Demo mode
+
+Demo mode simulates Leveraged and Spot as two independent fake accounts (`localStorage` keys `leveraged` / `spot`, each with its own starting $1,000 balance and simulated position) — switching tabs in the demo doesn't share balance or position state between them, matching how two separate MEXC wallets (Futures vs Spot) would behave for real.
+
 ## Login
 
 Since this deployment now trades on a real MEXC account, the whole app — the calculator page and every `api/*` endpoint — sits behind a login. `middleware.mjs` checks every request for a signed session cookie; anyone without one is redirected to `login.html` (or, for API calls, gets a 401).
@@ -226,12 +271,13 @@ This serves `index.html` and runs `api/price.js` locally so the "Get price" butt
 
 ## Backfill validation
 
-Two test files, both wired into `npm test`:
+Three test files, all wired into `npm test`:
 
-- `test/backfill.test.js` checks `calc.js` (the ladder-sizing engine) against the proven reference plan (the 12-buy, $951, $0.223-entry plan).
+- `test/backfill.test.js` checks `calc.js`'s `computePlan` (the leveraged ladder-sizing engine) against the proven reference plan (the 12-buy, $951, $0.223-entry plan).
 - `test/status-backfill.test.js` checks `statusCalc.js` — the P&L and projected-liquidation math shown on the Position Status card — against hand-computed, independently cross-checked fixtures (a loss scenario with resting orders, a zero-resting-orders case, a profitable long, and a profitable short).
+- `test/spot-backfill.test.js` checks `calc.js`'s `computeSpotPlan` against the same reference plan's trigger prices (confirming the shared `buildLadderShape` keeps Spot and Leveraged in sync), a second hand-computed fixture, and both error paths.
 
-Run both any time you change `calc.js` or `statusCalc.js`:
+Run all three any time you change `calc.js` or `statusCalc.js`:
 
 ```
 npm test

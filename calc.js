@@ -19,12 +19,20 @@
 
 const GROWTH_RATIO = 1.26;
 
-function computePlan({ entry, leverage, mmr, capital, numBuys, targetDrawdownPct }) {
+// Shared by computePlan (leveraged) and computeSpotPlan (spot): both use the
+// exact same N-buys-spaced-evenly-in-drawdown, geometric-growth-ratio ladder
+// shape, so their trigger prices land on identical points for the same
+// inputs — that's what makes them directly comparable. Only what happens
+// with the capital at each of those triggers differs between the two.
+// Note: this does NOT validate `entry` itself — each caller checks that
+// (with its own appropriately-worded message, since computePlan's mentions
+// leverage/capital and computeSpotPlan's doesn't) before calling in, so
+// error wording for existing callers doesn't shift under this refactor.
+function buildLadderShape({ entry, numBuys, targetDrawdownPct }) {
   const N = Math.round(numBuys);
   const T = targetDrawdownPct / 100;
   if (N < 1) throw new Error('Number of buys must be at least 1.');
   if (T <= 0 || T >= 1) throw new Error('Target drawdown coverage must be between 0% and 100% (exclusive).');
-  if (entry <= 0 || leverage <= 0 || capital <= 0) throw new Error('Entry price, leverage and capital must be positive.');
 
   const r = GROWTH_RATIO;
   const spacing = T / N;
@@ -32,12 +40,17 @@ function computePlan({ entry, leverage, mmr, capital, numBuys, targetDrawdownPct
   const prices = drawdowns.map((d) => entry * (1 - d));
 
   let K1 = 0;
+  for (let i = 0; i < N; i++) K1 += Math.pow(r, i);
+
+  return { N, T, r, drawdowns, prices, K1 };
+}
+
+function computePlan({ entry, leverage, mmr, capital, numBuys, targetDrawdownPct }) {
+  if (entry <= 0 || leverage <= 0 || capital <= 0) throw new Error('Entry price, leverage and capital must be positive.');
+  const { N, T, r, drawdowns, prices, K1 } = buildLadderShape({ entry, numBuys, targetDrawdownPct });
+
   let K2 = 0;
-  for (let i = 0; i < N; i++) {
-    const w = Math.pow(r, i);
-    K1 += w;
-    K2 += w / prices[i];
-  }
+  for (let i = 0; i < N; i++) K2 += Math.pow(r, i) / prices[i];
 
   const targetLiq = entry * (1 - T);
   const denom = leverage * (K1 * (1 + mmr) - K2 * targetLiq);
@@ -124,6 +137,61 @@ function computePlan({ entry, leverage, mmr, capital, numBuys, targetDrawdownPct
   };
 }
 
+// Spot DCA ladder — same trigger prices as computePlan (same buildLadderShape
+// call, same N/targetDrawdownPct/entry), but no leverage, no margin buffer,
+// no liquidation: every dollar of capital goes straight into buying the
+// asset at its ladder price, full stop. This intentionally reuses the exact
+// same ladder shape as the leveraged version so the two are directly
+// comparable — same trigger points, same growth ratio — the only thing that
+// differs is what happens to the capital at each trigger.
+function computeSpotPlan({ entry, capital, numBuys, targetDrawdownPct }) {
+  if (entry <= 0 || capital <= 0) throw new Error('Entry price and capital must be positive.');
+  const { N, drawdowns, prices, K1 } = buildLadderShape({ entry, numBuys, targetDrawdownPct });
+
+  // No liquidation target to solve for — E1 just has to make the buys sum
+  // to the full capital (r^i-weighted, same growth shape as the leveraged
+  // ladder).
+  const E1 = capital / K1;
+  const buyAmounts = drawdowns.map((_, i) => E1 * Math.pow(GROWTH_RATIO, i));
+  const totalBuys = buyAmounts.reduce((a, b) => a + b, 0);
+
+  const rows = [];
+  let cumQty = 0;
+  let avgEntry = null;
+  let cumSpent = 0;
+
+  for (let i = 0; i < N; i++) {
+    const amt = buyAmounts[i];
+    const price = prices[i];
+    const qty = amt / price; // 1x — no leverage, one dollar buys 1/price units
+    const newCumQty = cumQty + qty;
+    avgEntry = avgEntry === null ? price : (avgEntry * cumQty + price * qty) / newCumQty;
+    cumQty = newCumQty;
+    cumSpent += amt;
+    rows.push({
+      step: i + 1,
+      action: `Buy #${i + 1}`,
+      price,
+      drawdown: drawdowns[i],
+      amount: amt,
+      newQty: qty,
+      cumQty,
+      avgEntry,
+    });
+  }
+
+  const last = rows[rows.length - 1];
+  return {
+    rows,
+    totalBuys,
+    totalDeployed: totalBuys, // no separate margin step — this always equals capital
+    finalQty: last.cumQty,
+    finalAvgEntry: last.avgEntry,
+    lowestPrice: prices[prices.length - 1],
+    ladderDepth: drawdowns[drawdowns.length - 1], // how far the ladder actually reaches, as a fraction
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { computePlan, GROWTH_RATIO };
+  module.exports = { computePlan, computeSpotPlan, GROWTH_RATIO };
 }

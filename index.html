@@ -97,6 +97,18 @@
     margin-bottom: 16px;
     text-align: center;
   }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tab-btn {
+    background: var(--panel2);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tab-btn.active { background: var(--accent); color: #0b0f14; border-color: var(--accent); }
   .price-status { font-size: 12px; margin-top: 6px; min-height: 16px; }
   .price-status.ok { color: var(--green); }
   .price-status.err { color: var(--red); }
@@ -147,13 +159,18 @@
 <div class="wrap">
   <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
     <div>
-      <h1>Leveraged DCA Ladder Calculator</h1>
-      <div class="subtitle">Isolated-margin laddered buys sized to survive a target drawdown before liquidation. Live prices from MEXC Futures.</div>
+      <h1 id="pageTitle">Leveraged DCA Ladder Calculator</h1>
+      <div class="subtitle" id="pageSubtitle">Isolated-margin laddered buys sized to survive a target drawdown before liquidation. Live prices from MEXC Futures.</div>
     </div>
     <button id="logoutBtn" class="secondary" style="flex: 0 0 auto; margin-top: 2px;">Log out</button>
   </div>
 
   <div id="demoBanner" class="demo-banner">DEMO MODE — all balances, positions and orders on this page are simulated. No real MEXC account is connected and no real trades are ever placed.</div>
+
+  <div class="tabs">
+    <button id="tabLeveraged" class="tab-btn active">Leveraged</button>
+    <button id="tabSpot" class="tab-btn">Spot DCA</button>
+  </div>
 
   <div class="card">
     <h2>Inputs</h2>
@@ -178,7 +195,7 @@
         </div>
         <div id="balanceStatus" class="price-status"></div>
       </div>
-      <div>
+      <div id="leverageField">
         <label for="leverage">Leverage (x)</label>
         <input id="leverage" type="number" step="any" value="5" />
       </div>
@@ -189,10 +206,10 @@
         <input id="numBuys" type="number" step="1" min="1" max="30" value="12" />
       </div>
       <div>
-        <label for="targetDrawdown">Drawdown coverage (%)</label>
+        <label for="targetDrawdown" id="targetDrawdownLabel">Drawdown coverage (%)</label>
         <input id="targetDrawdown" type="number" step="any" min="1" max="99" value="70" />
       </div>
-      <div>
+      <div id="mmrField">
         <label for="mmr">Maintenance margin rate (%)</label>
         <input id="mmr" type="number" step="any" value="1" />
       </div>
@@ -211,12 +228,12 @@
       <h2>Summary</h2>
       <div class="summary-grid">
         <div class="stat"><div class="label">Total buys ($)</div><div class="value" id="sumBuys">—</div></div>
-        <div class="stat"><div class="label">Margin add ($)</div><div class="value" id="sumMargin">—</div></div>
+        <div class="stat" id="sumMarginStat"><div class="label">Margin add ($)</div><div class="value" id="sumMargin">—</div></div>
         <div class="stat"><div class="label">Total deployed ($)</div><div class="value" id="sumDeployed">—</div></div>
         <div class="stat"><div class="label">Final qty</div><div class="value" id="sumQty">—</div></div>
         <div class="stat"><div class="label">Final avg entry ($)</div><div class="value" id="sumAvg">—</div></div>
-        <div class="stat"><div class="label">Final liquidation ($)</div><div class="value liq" id="sumLiq">—</div></div>
-        <div class="stat"><div class="label">Drawdown covered</div><div class="value cov" id="sumCovered">—</div></div>
+        <div class="stat" id="sumLiqStat"><div class="label">Final liquidation ($)</div><div class="value liq" id="sumLiq">—</div></div>
+        <div class="stat"><div class="label" id="sumCoveredLabel">Drawdown covered</div><div class="value cov" id="sumCovered">—</div></div>
       </div>
     </div>
 
@@ -234,13 +251,13 @@
               <th>New qty</th>
               <th>Cumulative qty</th>
               <th>Avg entry ($)</th>
-              <th>Liquidation ($)</th>
+              <th id="liqColHeader">Liquidation ($)</th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
-      <div class="note">
+      <div class="note" id="ladderNote">
         Fees and funding are ignored. Liquidation price uses MEXC's isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls; the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price.
       </div>
     </div>
@@ -250,10 +267,10 @@
       <div class="summary-grid">
         <div class="stat"><div class="label">Avg entry ($)</div><div class="value" id="posAvgEntry">—</div></div>
         <div class="stat"><div class="label">Position size</div><div class="value" id="posQty">—</div></div>
-        <div class="stat"><div class="label">Leverage</div><div class="value" id="posLeverage">—</div></div>
+        <div class="stat" id="posLeverageStat"><div class="label">Leverage</div><div class="value" id="posLeverage">—</div></div>
         <div class="stat"><div class="label">Unrealized P&amp;L ($)</div><div class="value" id="posPnlDollar">—</div></div>
         <div class="stat"><div class="label">Unrealized P&amp;L (%)</div><div class="value" id="posPnlPercent">—</div></div>
-        <div class="stat"><div class="label">Liq. if fully filled ($)</div><div class="value liq" id="posLiq">—</div></div>
+        <div class="stat" id="posLiqStat"><div class="label">Liq. if fully filled ($)</div><div class="value liq" id="posLiq">—</div></div>
       </div>
       <div class="calc-btn-row" style="align-items: center;">
         <button id="refreshStatusBtn" class="secondary">Refresh status</button>
@@ -290,14 +307,14 @@
             <tr>
               <th>Step</th>
               <th>Price ($)</th>
-              <th>Vol (contracts)</th>
+              <th id="execVolHeader">Vol (contracts)</th>
               <th>Result</th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
-      <div class="note">
+      <div class="note" id="executeNote">
         Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). As a last step, whatever of "Total capital" wasn't actually committed to a placed order gets added directly to the position as margin — computed from each order's real, exchange-rounded fill size rather than the plan's theoretical numbers, so it accounts for MEXC's contract-size rounding automatically.
       </div>
     </div>
@@ -305,7 +322,7 @@
 
   <div class="card danger-card">
     <h2>Danger Zone</h2>
-    <div class="note" style="margin-top: 0; padding-top: 0; border-top: none; margin-bottom: 16px;">
+    <div class="note" id="dangerNote" style="margin-top: 0; padding-top: 0; border-top: none; margin-bottom: 16px;">
       Cancels every open order and flash-closes any open position on the asset entered above, at market, on MEXC. This is account-flattening for that one symbol only — it cannot be undone.
     </div>
     <button id="closeBtn" class="danger-btn">Close position</button>
@@ -324,7 +341,7 @@
     </div>
   </div>
 
-  <footer>Prices via MEXC Futures public ticker. Not financial advice.</footer>
+  <footer id="footerNote">Prices via MEXC Futures public ticker. Not financial advice.</footer>
 </div>
 
 <script src="calc.js"></script>
@@ -343,12 +360,21 @@ const fmtPrice = (n) => {
 const el = (id) => document.getElementById(id);
 let lastPlan = null;
 
+// Which tab is active — 'leveraged' (Futures, isolated margin) or 'spot'
+// (plain DCA, no leverage/margin/liquidation at all). Nearly every handler
+// below dispatches on this first, then (for the real, non-demo path) on
+// demoMode second.
+let mode = 'leveraged';
+
 // Demo mode — set via the DEMO_MODE env var on a *separate* Vercel project
 // pointed at this same repo (see README's "Demo instance" section). When
 // on, nothing on this page ever calls a real MEXC endpoint that needs
 // account access: balance/position/orders are simulated entirely in the
 // browser via localStorage, using the same math (statusCalc.js) as the
-// real Position Status card so the numbers behave identically.
+// real Position Status card so the numbers behave identically. The
+// simulated account is split per mode (account.leveraged / account.spot)
+// so switching tabs in the demo behaves like two independent accounts,
+// same as the real MEXC Futures wallet and Spot wallet are independent.
 let demoMode = false;
 const DEMO_STORAGE_KEY = 'demoAccount';
 const DEMO_STARTING_BALANCE = 1000;
@@ -356,11 +382,23 @@ const DEMO_STARTING_BALANCE = 1000;
 function loadDemoAccount() {
   try {
     const raw = localStorage.getItem(DEMO_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Back-compat: earlier versions of this app stored one flat
+      // leveraged-only account. Upgrade it into the per-mode shape rather
+      // than silently discarding it.
+      if (parsed && !parsed.leveraged && !parsed.spot) {
+        return { leveraged: parsed, spot: { balance: DEMO_STARTING_BALANCE, position: null } };
+      }
+      if (parsed && parsed.leveraged && parsed.spot) return parsed;
+    }
   } catch {
     // corrupt/old data — fall through to a fresh account
   }
-  return { balance: DEMO_STARTING_BALANCE, position: null };
+  return {
+    leveraged: { balance: DEMO_STARTING_BALANCE, position: null },
+    spot: { balance: DEMO_STARTING_BALANCE, position: null },
+  };
 }
 
 function saveDemoAccount(account) {
@@ -386,9 +424,83 @@ const toFuturesSymbol = (raw) => {
   return s.endsWith('_USDT') ? s : `${s}_USDT`;
 };
 
+// Spot symbols have no separator (CRVUSDT, not CRV_USDT).
+const toSpotSymbol = (raw) => {
+  const s = raw.trim().toUpperCase();
+  return s.endsWith('USDT') ? s : `${s}USDT`;
+};
+
 const ORDER_STATE_LABEL = { 1: 'Pending', 2: 'Resting', 3: 'Filled', 4: 'Canceled', 5: 'Invalid' };
 const ORDER_STATE_COLOR = { 1: 'var(--muted)', 2: 'var(--accent2)', 3: 'var(--green)', 4: 'var(--muted)', 5: 'var(--red)' };
 const ORDER_TYPE_LABEL = { 1: 'Limit', 2: 'Post Only', 3: 'IOC', 4: 'FOK', 5: 'Market' };
+
+// Text/labels that differ between tabs. Applied by setMode() below.
+const MODE_COPY = {
+  leveraged: {
+    title: 'Leveraged DCA Ladder Calculator',
+    subtitle: 'Isolated-margin laddered buys sized to survive a target drawdown before liquidation. Live prices from MEXC Futures.',
+    drawdownLabel: 'Drawdown coverage (%)',
+    coveredLabel: 'Drawdown covered',
+    volHeader: 'Vol (contracts)',
+    ladderNote: 'Fees and funding are ignored. Liquidation price uses MEXC\'s isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls; the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price.',
+    executeNote: 'Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). As a last step, whatever of "Total capital" wasn\'t actually committed to a placed order gets added directly to the position as margin — computed from each order\'s real, exchange-rounded fill size rather than the plan\'s theoretical numbers, so it accounts for MEXC\'s contract-size rounding automatically.',
+    dangerNote: 'Cancels every open order and flash-closes any open position on the asset entered above, at market, on MEXC. This is account-flattening for that one symbol only — it cannot be undone.',
+    footer: 'Prices via MEXC Futures public ticker. Not financial advice.',
+  },
+  spot: {
+    title: 'Spot DCA Ladder Calculator',
+    subtitle: 'Plain dollar-cost-averaging buys — no leverage, no margin, no liquidation. Live prices from MEXC Spot.',
+    drawdownLabel: 'Ladder depth (%)',
+    coveredLabel: 'Ladder depth',
+    volHeader: 'Qty',
+    ladderNote: 'Fees are ignored. There\'s no leverage or liquidation here — every dollar of "Total capital" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls, spaced evenly across the ladder down to the requested depth. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, so the two are directly comparable.',
+    executeNote: 'Places every buy row above as a MEXC Spot order (market for Buy #1, limit for the rest), using the same <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> as the rest of this app — the key just needs Spot trading permission enabled too, alongside whatever Futures permissions it already has. No leverage, no margin: every dollar of capital goes straight into buy orders, full stop.',
+    dangerNote: 'Cancels every open order and market-sells your ENTIRE free balance of the asset entered above back to USDT. This is account-flattening for that one asset only — it cannot be undone.',
+    footer: 'Prices via MEXC Spot public ticker. Not financial advice.',
+  },
+};
+
+function setMode(newMode) {
+  mode = newMode;
+  const copy = MODE_COPY[mode];
+  const isSpot = mode === 'spot';
+
+  el('tabLeveraged').classList.toggle('active', !isSpot);
+  el('tabSpot').classList.toggle('active', isSpot);
+
+  el('pageTitle').textContent = copy.title;
+  el('pageSubtitle').textContent = copy.subtitle;
+  el('targetDrawdownLabel').textContent = copy.drawdownLabel;
+  el('sumCoveredLabel').textContent = copy.coveredLabel;
+  el('execVolHeader').textContent = copy.volHeader;
+  el('ladderNote').innerHTML = copy.ladderNote;
+  el('executeNote').innerHTML = copy.executeNote;
+  el('dangerNote').textContent = copy.dangerNote;
+  el('footerNote').textContent = copy.footer;
+
+  el('leverageField').style.display = isSpot ? 'none' : '';
+  el('mmrField').style.display = isSpot ? 'none' : '';
+  el('sumMarginStat').style.display = isSpot ? 'none' : '';
+  el('sumLiqStat').style.display = isSpot ? 'none' : '';
+  el('liqColHeader').style.display = isSpot ? 'none' : '';
+  el('posLeverageStat').style.display = isSpot ? 'none' : '';
+  el('posLiqStat').style.display = isSpot ? 'none' : '';
+
+  // Transient result state shouldn't leak between tabs.
+  lastPlan = null;
+  el('results').style.display = 'none';
+  el('errorBox').style.display = 'none';
+  el('priceStatus').textContent = '';
+  el('balanceStatus').textContent = '';
+
+  Promise.all([fetchLivePrice(), fetchLiveBalance()]).then(() => {
+    el('calcBtn').click();
+    checkPositionStatus();
+  });
+}
+
+el('tabLeveraged').addEventListener('click', () => setMode('leveraged'));
+el('tabSpot').addEventListener('click', () => setMode('spot'));
 
 // Renders the Position Status card from a status payload shaped like
 // api/status.js's response ({hasPosition, position, pnl, projectedLiquidation,
@@ -402,7 +514,7 @@ function renderPositionStatus(data) {
     const p = data.position;
     el('posAvgEntry').textContent = `$${fmtPrice(Number(p.holdAvgPrice))}`;
     el('posQty').textContent = fmtQty(Number(p.holdVol));
-    el('posLeverage').textContent = `${p.leverage}x`;
+    el('posLeverage').textContent = p.leverage ? `${p.leverage}x` : '—';
 
     const pnlDollarEl = el('posPnlDollar');
     const pnlPercentEl = el('posPnlPercent');
@@ -480,16 +592,20 @@ function renderPositionStatus(data) {
 // Checks whether a position is currently open for the symbol in the Asset
 // field, and switches the UI between the "plan calculator" state (Execute
 // card shown) and the "position status" state (fill list shown, Execute
-// hidden so a second ladder can't get deployed on top of a live one). In
-// demo mode this reads the simulated position from localStorage instead of
-// calling MEXC, computing PnL/liquidation with the same statusCalc.js math
-// the server uses.
+// hidden so a second ladder can't get deployed on top of a live one).
 async function checkPositionStatus() {
+  return mode === 'spot' ? checkSpotPositionStatus() : checkLeveragedPositionStatus();
+}
+
+// In demo mode this reads the simulated position from localStorage instead
+// of calling MEXC, computing PnL/liquidation with the same statusCalc.js
+// math the server uses.
+async function checkLeveragedPositionStatus() {
   const symbol = toFuturesSymbol(el('symbol').value);
 
   if (demoMode) {
     const account = loadDemoAccount();
-    const position = account.position;
+    const position = account.leveraged.position;
     if (!position || position.symbol !== symbol) {
       renderPositionStatus({ hasPosition: false });
       return;
@@ -536,9 +652,58 @@ async function checkPositionStatus() {
   }
 }
 
+// Spot has no unified "position" object — api/spot-status.js reconstructs
+// holdings from filled orders and maps them into the exact same shape
+// Futures orders use, so renderPositionStatus() needs no spot-specific
+// branching of its own.
+async function checkSpotPositionStatus() {
+  const symbol = toSpotSymbol(el('symbol').value);
+
+  if (demoMode) {
+    const account = loadDemoAccount();
+    const position = account.spot.position;
+    if (!position || position.symbol !== symbol) {
+      renderPositionStatus({ hasPosition: false });
+      return;
+    }
+    const currentPrice = Number(el('entry').value) || position.holdAvgPrice;
+    const costBasis = position.holdAvgPrice * position.holdVol; // no leverage — cost basis IS the capital at risk
+    const pnl = computePnl({
+      holdAvgPrice: position.holdAvgPrice,
+      holdVol: position.holdVol,
+      contractSize: 1,
+      currentPrice,
+      im: costBasis,
+      isLong: true,
+    });
+    renderPositionStatus({
+      hasPosition: true,
+      position: { holdAvgPrice: position.holdAvgPrice, holdVol: position.holdVol },
+      pnl: { ...pnl, currentPrice },
+      projectedLiquidation: null,
+      sinceTime: position.sinceTime,
+      orders: position.orders,
+    });
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/spot-status?symbol=${encodeURIComponent(symbol)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not check position status.');
+    renderPositionStatus(data);
+  } catch (err) {
+    console.error('Spot position status check failed:', err.message || err);
+  }
+}
+
 // Pulls the live MEXC price into the Entry field. Shared by the "Get price"
-// button and the automatic page-load / Reset refresh.
+// button and the automatic page-load / tab-switch / Reset refresh.
 async function fetchLivePrice() {
+  return mode === 'spot' ? fetchSpotPrice() : fetchLeveragedPrice();
+}
+
+async function fetchLeveragedPrice() {
   const symRaw = el('symbol').value.trim().toUpperCase();
   if (!symRaw) return;
   const symbol = symRaw.endsWith('_USDT') ? symRaw : `${symRaw}_USDT`;
@@ -564,6 +729,32 @@ async function fetchLivePrice() {
   }
 }
 
+async function fetchSpotPrice() {
+  const symRaw = el('symbol').value.trim().toUpperCase();
+  if (!symRaw) return;
+  const symbol = toSpotSymbol(symRaw);
+  const statusEl = el('priceStatus');
+  statusEl.textContent = 'Fetching…';
+  statusEl.className = 'price-status pending';
+  el('fetchBtn').disabled = true;
+  try {
+    const res = await fetch(`/api/spot-price?symbol=${encodeURIComponent(symbol)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch price.');
+    if (!(Number(data.lastPrice) > 0)) {
+      throw new Error(`Got an invalid price (${data.lastPrice}) for ${data.symbol} — leaving Entry price unchanged.`);
+    }
+    el('entry').value = data.lastPrice;
+    statusEl.textContent = `${data.symbol} last price: $${data.lastPrice} (MEXC Spot)`;
+    statusEl.className = 'price-status ok';
+  } catch (err) {
+    statusEl.textContent = err.message || 'Could not fetch price — enter it manually.';
+    statusEl.className = 'price-status err';
+  } finally {
+    el('fetchBtn').disabled = false;
+  }
+}
+
 el('fetchBtn').addEventListener('click', async () => {
   await fetchLivePrice();
   checkPositionStatus();
@@ -577,6 +768,10 @@ el('refreshStatusBtn').addEventListener('click', () => {
 });
 
 el('closeBtn').addEventListener('click', async () => {
+  return mode === 'spot' ? closeSpotPosition() : closeLeveragedPosition();
+});
+
+async function closeLeveragedPosition() {
   const statusEl = el('closeStatus');
   const table = el('closeTable');
   const tbody = table.querySelector('tbody');
@@ -596,7 +791,7 @@ el('closeBtn').addEventListener('click', async () => {
 
   if (demoMode) {
     const account = loadDemoAccount();
-    account.position = null;
+    account.leveraged.position = null;
     saveDemoAccount(account);
     statusEl.textContent = `${symbol}: simulated orders canceled, position flat.`;
     statusEl.className = 'price-status ok';
@@ -650,7 +845,84 @@ el('closeBtn').addEventListener('click', async () => {
     el('closeBtn').disabled = false;
   }
   checkPositionStatus();
-});
+}
+
+async function closeSpotPosition() {
+  const statusEl = el('closeStatus');
+  const table = el('closeTable');
+  const tbody = table.querySelector('tbody');
+
+  const symbol = toSpotSymbol(el('symbol').value);
+  const baseAsset = el('symbol').value.trim().toUpperCase();
+  const confirmMsg = demoMode
+    ? `Sell the simulated ${baseAsset} holdings and clear all simulated orders? This is a demo — nothing real happens.`
+    : `Cancel ALL open orders and market-sell your ENTIRE ${baseAsset} balance back to USDT? This cannot be undone.`;
+  const ok = confirm(confirmMsg);
+  if (!ok) return;
+
+  el('closeBtn').disabled = true;
+  statusEl.textContent = `Closing ${symbol}…`;
+  statusEl.className = 'price-status pending';
+  table.style.display = 'none';
+  tbody.innerHTML = '';
+
+  if (demoMode) {
+    const account = loadDemoAccount();
+    account.spot.position = null;
+    saveDemoAccount(account);
+    statusEl.textContent = `${symbol}: simulated orders canceled, holdings sold.`;
+    statusEl.className = 'price-status ok';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>Close position</td>
+      <td style="text-align: left;">All simulated orders + holdings</td>
+      <td style="color: var(--green); text-align: left;">Closed (simulated)</td>
+    `;
+    tbody.appendChild(tr);
+    table.style.display = '';
+    el('closeBtn').disabled = false;
+    await Promise.all([checkPositionStatus(), fetchLiveBalance()]);
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/spot-close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, baseAsset }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Close failed.');
+
+    const allOk = data.steps.every((s) => s.success);
+    statusEl.textContent = allOk ? `${symbol}: orders canceled, holdings sold.` : 'Some steps failed — check the table below.';
+    statusEl.className = allOk ? 'price-status ok' : 'price-status err';
+
+    data.steps.forEach((s) => {
+      const tr = document.createElement('tr');
+      const label = s.step === 'cancel_orders' ? 'Cancel orders' : 'Sell holdings';
+      const detail = s.step === 'sell_holdings'
+        ? (s.quantity ? `${s.quantity} ${baseAsset}` : (s.note || '—'))
+        : (s.note || 'All open orders');
+      const result = s.success
+        ? (s.orderId ? `Sold — order ${s.orderId}` : (s.note || 'OK'))
+        : s.error;
+      tr.innerHTML = `
+        <td>${label}</td>
+        <td style="text-align: left;">${detail}</td>
+        <td style="color: ${s.success ? 'var(--green)' : 'var(--red)'}; text-align: left;">${result}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    table.style.display = '';
+  } catch (err) {
+    statusEl.textContent = err.message || 'Close failed.';
+    statusEl.className = 'price-status err';
+  } finally {
+    el('closeBtn').disabled = false;
+  }
+  checkPositionStatus();
+}
 
 el('logoutBtn').addEventListener('click', async () => {
   if (demoMode) {
@@ -667,8 +939,13 @@ el('logoutBtn').addEventListener('click', async () => {
 });
 
 // Pulls the live MEXC usable balance into the Total capital field. Shared
-// by the "Get balance" button and the automatic page-load / Reset refresh.
+// by the "Get balance" button and the automatic page-load / tab-switch /
+// Reset refresh.
 async function fetchLiveBalance() {
+  return mode === 'spot' ? fetchSpotBalance() : fetchLeveragedBalance();
+}
+
+async function fetchLeveragedBalance() {
   const statusEl = el('balanceStatus');
   statusEl.textContent = 'Fetching…';
   statusEl.className = 'price-status pending';
@@ -678,8 +955,8 @@ async function fetchLiveBalance() {
     // Simulated bankroll minus margin committed to any open simulated
     // position — no MEXC account involved.
     const account = loadDemoAccount();
-    const committed = account.position ? Number(account.position.im) : 0;
-    const available = Math.max(0, account.balance - committed);
+    const committed = account.leveraged.position ? Number(account.leveraged.position.im) : 0;
+    const available = Math.max(0, account.leveraged.balance - committed);
     el('capital').value = available.toFixed(2);
     statusEl.textContent = `Simulated balance: $${fmt2(available)} (demo — no real account connected)`;
     statusEl.className = 'price-status ok';
@@ -717,9 +994,54 @@ async function fetchLiveBalance() {
   }
 }
 
+async function fetchSpotBalance() {
+  const statusEl = el('balanceStatus');
+  statusEl.textContent = 'Fetching…';
+  statusEl.className = 'price-status pending';
+  el('balanceBtn').disabled = true;
+
+  if (demoMode) {
+    const account = loadDemoAccount();
+    const position = account.spot.position;
+    const committed = position ? position.holdAvgPrice * position.holdVol : 0;
+    const available = Math.max(0, account.spot.balance - committed);
+    el('capital').value = available.toFixed(2);
+    statusEl.textContent = `Simulated balance: $${fmt2(available)} (demo — no real account connected)`;
+    statusEl.className = 'price-status ok';
+    el('balanceBtn').disabled = false;
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/spot-balance?asset=USDT');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch balance.');
+    const usable = Number(data.free);
+    const usableRounded = Number(usable.toFixed(2));
+    const MIN_CAPITAL = 1;
+    if (usableRounded >= MIN_CAPITAL) {
+      el('capital').value = usableRounded.toFixed(2);
+      statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Spot)`;
+      statusEl.className = 'price-status ok';
+    } else {
+      statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT — too low to use as capital; Total capital left unchanged.`;
+      statusEl.className = 'price-status err';
+    }
+  } catch (err) {
+    statusEl.textContent = err.message || 'Could not fetch balance — enter it manually.';
+    statusEl.className = 'price-status err';
+  } finally {
+    el('balanceBtn').disabled = false;
+  }
+}
+
 el('balanceBtn').addEventListener('click', fetchLiveBalance);
 
 el('calcBtn').addEventListener('click', () => {
+  return mode === 'spot' ? calculateSpotPlan() : calculateLeveragedPlan();
+});
+
+function calculateLeveragedPlan() {
   const errorBox = el('errorBox');
   const resultsBox = el('results');
   errorBox.style.display = 'none';
@@ -783,9 +1105,73 @@ el('calcBtn').addEventListener('click', () => {
   });
 
   resultsBox.style.display = 'block';
-});
+}
+
+function calculateSpotPlan() {
+  const errorBox = el('errorBox');
+  const resultsBox = el('results');
+  errorBox.style.display = 'none';
+  resultsBox.style.display = 'none';
+
+  const params = {
+    entry: parseFloat(el('entry').value),
+    capital: parseFloat(el('capital').value),
+    numBuys: parseInt(el('numBuys').value, 10),
+    targetDrawdownPct: parseFloat(el('targetDrawdown').value),
+  };
+
+  if (Object.values(params).some((v) => Number.isNaN(v))) {
+    errorBox.textContent = 'Please fill in all fields with valid numbers.';
+    errorBox.style.display = 'block';
+    return;
+  }
+
+  let result;
+  try {
+    result = computeSpotPlan(params);
+  } catch (err) {
+    errorBox.textContent = err.message;
+    errorBox.style.display = 'block';
+    return;
+  }
+
+  lastPlan = result;
+  el('execBox').style.display = 'none';
+  el('execStatus').textContent = '';
+  el('execTable').style.display = 'none';
+
+  el('sumBuys').textContent = `$${fmt2(result.totalBuys)}`;
+  el('sumDeployed').textContent = `$${fmt2(result.totalDeployed)}`;
+  el('sumQty').textContent = fmtQty(result.finalQty);
+  el('sumAvg').textContent = `$${fmtPrice(result.finalAvgEntry)}`;
+  el('sumCovered').textContent = `${(result.ladderDepth * 100).toFixed(2)}%`;
+
+  const tbody = document.querySelector('#planTable tbody');
+  tbody.innerHTML = '';
+  result.rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    const displayAction = row.step === 1 ? 'Market Buy #1' : row.action;
+    tr.innerHTML = `
+      <td>${row.step}</td>
+      <td class="action-buy">${displayAction}</td>
+      <td>$${fmtPrice(row.price)}</td>
+      <td>${(row.drawdown * 100).toFixed(2)}%</td>
+      <td>$${fmt2(row.amount)}</td>
+      <td>${fmtQty(row.newQty)}</td>
+      <td>${fmtQty(row.cumQty)}</td>
+      <td>$${fmtPrice(row.avgEntry)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  resultsBox.style.display = 'block';
+}
 
 el('executeBtn').addEventListener('click', async () => {
+  return mode === 'spot' ? executeSpotPlan() : executeLeveragedPlan();
+});
+
+async function executeLeveragedPlan() {
   const execBox = el('execBox');
   const statusEl = el('execStatus');
   const table = el('execTable');
@@ -833,7 +1219,7 @@ el('executeBtn').addEventListener('click', async () => {
     const marketMargin = (marketOrder.price * marketOrder.qty) / leverage;
 
     const account = loadDemoAccount();
-    account.position = {
+    account.leveraged.position = {
       symbol,
       holdAvgPrice: marketOrder.price,
       holdVol: marketOrder.qty,
@@ -944,7 +1330,118 @@ el('executeBtn').addEventListener('click', async () => {
     el('executeBtn').disabled = false;
   }
   checkPositionStatus();
-});
+}
+
+async function executeSpotPlan() {
+  const execBox = el('execBox');
+  const statusEl = el('execStatus');
+  const table = el('execTable');
+  const tbody = table.querySelector('tbody');
+  execBox.style.display = 'none';
+
+  if (!lastPlan) {
+    statusEl.textContent = 'Calculate a plan first.';
+    statusEl.className = 'price-status err';
+    return;
+  }
+
+  // computeSpotPlan's rows are all buys — no "Add Margin" rows to filter out.
+  const orders = lastPlan.rows.map((r) => ({ step: r.step, price: r.price, qty: r.newQty, market: r.step === 1 }));
+
+  const symbol = toSpotSymbol(el('symbol').value);
+  const capital = parseFloat(el('capital').value);
+
+  const limitCount = orders.filter((o) => !o.market).length;
+  const confirmMsg = demoMode
+    ? `Simulate 1 market buy + ${limitCount} limit buy orders for ${symbol} on MEXC Spot? This is a demo — no real funds or account involved.`
+    : `Place 1 market buy + ${limitCount} limit buy orders on MEXC Spot for ${symbol}? This uses real funds — no leverage, spends your capital directly.`;
+  const ok = confirm(confirmMsg);
+  if (!ok) return;
+
+  el('executeBtn').disabled = true;
+  statusEl.textContent = demoMode ? `Simulating ${orders.length} orders…` : `Placing ${orders.length} orders…`;
+  statusEl.className = 'price-status pending';
+  table.style.display = 'none';
+  tbody.innerHTML = '';
+
+  if (demoMode) {
+    const marketOrder = orders.find((o) => o.market);
+    const account = loadDemoAccount();
+    account.spot.position = {
+      symbol,
+      holdAvgPrice: marketOrder.price,
+      holdVol: marketOrder.qty,
+      sinceTime: Date.now(),
+      orders: orders.map((o) => ({
+        orderId: `DEMO-${o.step}`,
+        price: o.price,
+        vol: o.qty,
+        dealVol: o.market ? o.qty : 0,
+        dealAvgPrice: o.market ? o.price : 0,
+        side: 1,
+        orderType: o.market ? 5 : 1,
+        state: o.market ? 3 : 2,
+        createTime: Date.now(),
+      })),
+    };
+    saveDemoAccount(account);
+
+    statusEl.textContent = `${orders.length}/${orders.length} orders simulated successfully.`;
+    statusEl.className = 'price-status ok';
+    orders.forEach((o) => {
+      const tr = document.createElement('tr');
+      const label = o.market ? 'Market' : 'Limit';
+      tr.innerHTML = `
+        <td>${o.step}</td>
+        <td>$${fmtPrice(o.price)}</td>
+        <td>${o.qty}</td>
+        <td style="color: var(--green); text-align: left;">${label} — order DEMO-${o.step} (simulated)</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    table.style.display = '';
+    el('executeBtn').disabled = false;
+    checkPositionStatus();
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/spot-execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, capital, orders }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Execution failed.');
+
+    const successCount = data.results.filter((r) => r.success).length;
+    statusEl.textContent = `${successCount}/${data.results.length} orders placed successfully.`;
+    if (data.leftoverCapital !== null && data.leftoverCapital !== undefined && data.leftoverCapital > 0.01) {
+      statusEl.textContent += ` $${fmt2(data.leftoverCapital)} of capital wasn't committed to an order (rounding/precision) — still sitting in your Spot USDT balance.`;
+    }
+    statusEl.className = successCount === data.results.length ? 'price-status ok' : 'price-status err';
+
+    data.results.forEach((r) => {
+      const tr = document.createElement('tr');
+      const label = r.orderType === 'market' ? 'Market' : 'Limit';
+      const qtyDisplay = r.qty === null || r.qty === undefined ? `~$${fmt2(r.quoteOrderQty)} spent` : r.qty;
+      tr.innerHTML = `
+        <td>${r.step}</td>
+        <td>$${fmtPrice(r.price)}</td>
+        <td>${qtyDisplay}</td>
+        <td style="color: ${r.success ? 'var(--green)' : 'var(--red)'}; text-align: left;">${r.success ? `${label} — order ${r.orderId}` : r.error}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    table.style.display = '';
+  } catch (err) {
+    statusEl.textContent = err.message || 'Execution failed.';
+    statusEl.className = 'price-status err';
+  } finally {
+    el('executeBtn').disabled = false;
+  }
+  checkPositionStatus();
+}
 
 el('resetBtn').addEventListener('click', async () => {
   el('symbol').value = 'CRV';
