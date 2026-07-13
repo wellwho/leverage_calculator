@@ -2,6 +2,7 @@
   "buildCommand": "npm test",
   "outputDirectory": ".",
   "functions": {
-    "api/execute.js": { "maxDuration": 60 }
+    "api/execute.js": { "maxDuration": 60 },
+    "api/spot/[action].js": { "maxDuration": 60 }
   }
 }

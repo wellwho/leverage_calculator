@@ -21,11 +21,7 @@ Live entry price pulled from MEXC (Futures ticker for the Leveraged tab, Spot ti
 - `api/status.js` — reports whether a position is open and how the ladder's orders have filled
 
 ### Spot (MEXC Spot)
-- `api/spot-price.js` — proxies MEXC's spot ticker
-- `api/spot-execute.js` — places the ladder's buy orders on MEXC Spot (no leverage/margin)
-- `api/spot-balance.js` — fetches your available USDT spot balance
-- `api/spot-close.js` — behind the "Close Position" button in Spot mode
-- `api/spot-status.js` — reports fill status for the current run's orders (spot has no unified "position" object, so this is reconstructed from order fills)
+- `api/spot/[action].js` — one Vercel Function handling all five Spot endpoints (`price`, `balance`, `execute`, `status`, `close`) at `/api/spot/price`, `/api/spot/balance`, etc., dispatching on the `action` URL segment. Kept as a single file rather than five separate ones because Vercel's Hobby plan caps a deployment at 12 serverless functions — five extra Spot files would have pushed this project over that limit alongside the 7 Leveraged/auth functions already deployed. See the file's own header comment for how each action's logic maps back to its original standalone version.
 
 ### Auth
 - `login.html` — sign-in page
@@ -176,7 +172,7 @@ The **Spot DCA** tab runs the same laddered-buy idea with no leverage, no margin
 
 The Spot tab reuses the **same** `MEXC_API_KEY` / `MEXC_API_SECRET` env vars as the Leveraged tab — no new env vars to add. The one manual step is on MEXC's side: your API key needs **Spot trading permission** enabled in addition to whatever Futures permissions it already has (MEXC website → API Management → edit the key → enable "Spot Trading"). Nothing here needs KYC beyond what Futures already required.
 
-### API differences from Futures (why there's a separate set of `api/spot-*.js` files)
+### API differences from Futures (why Spot has its own routing)
 
 MEXC Spot v3 is a different API surface from Futures, not just a different symbol format:
 
@@ -185,13 +181,13 @@ MEXC Spot v3 is a different API surface from Futures, not just a different symbo
 - **Order precision** comes from flat `baseAssetPrecision` / `quotePrecision` fields on `GET /api/v3/exchangeInfo` (MEXC's spot API doesn't document a Binance-style `LOT_SIZE`/`PRICE_FILTER` filter list).
 - **Market buys spend an exact dollar amount** via `quoteOrderQty` rather than a pre-computed base quantity, so the first ladder rung always costs exactly what the plan says regardless of the instant of execution.
 - **Order-history lookback is capped at 7 days** (`GET /api/v3/allOrders`) — unlike the Futures integration's `history_orders` endpoint, which has no such limit. A deployment left running longer than a week without a fresh Execute would lose visibility into that run's early orders in the Position Status card.
-- MEXC's published Spot docs left some details unconfirmed (the full order-status enum beyond `NEW`/`CANCELED`, and one inconsistent `LIMIT`/`LIMIT_ORDER` example). `api/spot-status.js` sidesteps this by classifying fills from `executedQty` vs `origQty` — fields confirmed everywhere in the docs — rather than trusting an exact status string.
+- MEXC's published Spot docs left some details unconfirmed (the full order-status enum beyond `NEW`/`CANCELED`, and one inconsistent `LIMIT`/`LIMIT_ORDER` example). The `status` action sidesteps this by classifying fills from `executedQty` vs `origQty` — fields confirmed everywhere in the docs — rather than trusting an exact status string.
 
-### What each endpoint does
-- `api/spot-price.js` / `api/spot-balance.js` — live price and available USDT, same role as `api/price.js` / `api/balance.js`.
-- `api/spot-execute.js` — places buy #1 as a market order (`quoteOrderQty`) and every other rung as a resting limit order, 550ms apart. After all orders are placed it reports `leftoverCapital` (planned capital minus what was actually committed) as an **informational line only** — unlike the Leveraged tab, this is not auto-deployed anywhere, since spot has no margin concept to add it to.
-- `api/spot-status.js` — maps MEXC Spot orders into the exact same shape/encoding the Futures integration uses (`state`: resting/filled/canceled, `orderType`: limit/market), so the existing Position Status card — including the cumulative "avg entry if filled" column — renders Spot runs with zero extra UI code. Reconstructs "position" (avg entry, size) from filled orders directly, since spot has no unified position object the way Futures does. P&L % is computed against cost basis (price × filled qty) standing in for margin, since there's no leverage to divide by.
-- `api/spot-close.js` — the Spot tab's "Close Position": cancels every resting order on the symbol, then market-sells the **entire free balance** of the base asset back to USDT. Like the Futures panic button, this flattens the whole symbol, not just the current run.
+### What each `api/spot/[action].js` action does
+- `price` / `balance` (GET `/api/spot/price`, `/api/spot/balance`) — live price and available USDT, same role as `api/price.js` / `api/balance.js`.
+- `execute` (POST `/api/spot/execute`) — places buy #1 as a market order (`quoteOrderQty`) and every other rung as a resting limit order, 550ms apart. After all orders are placed it reports `leftoverCapital` (planned capital minus what was actually committed) as an **informational line only** — unlike the Leveraged tab, this is not auto-deployed anywhere, since spot has no margin concept to add it to.
+- `status` (GET `/api/spot/status`) — maps MEXC Spot orders into the exact same shape/encoding the Futures integration uses (`state`: resting/filled/canceled, `orderType`: limit/market), so the existing Position Status card — including the cumulative "avg entry if filled" column — renders Spot runs with zero extra UI code. Reconstructs "position" (avg entry, size) from filled orders directly, since spot has no unified position object the way Futures does. P&L % is computed against cost basis (price × filled qty) standing in for margin, since there's no leverage to divide by.
+- `close` (POST `/api/spot/close`) — the Spot tab's "Close Position": cancels every resting order on the symbol, then market-sells the **entire free balance** of the base asset back to USDT. Like the Futures panic button, this flattens the whole symbol, not just the current run.
 
 ### Demo mode
 

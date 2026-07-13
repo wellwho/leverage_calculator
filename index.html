@@ -652,7 +652,8 @@ async function checkLeveragedPositionStatus() {
   }
 }
 
-// Spot has no unified "position" object — api/spot-status.js reconstructs
+// Spot has no unified "position" object — api/spot/[action].js (the "status"
+// action) reconstructs
 // holdings from filled orders and maps them into the exact same shape
 // Futures orders use, so renderPositionStatus() needs no spot-specific
 // branching of its own.
@@ -688,7 +689,7 @@ async function checkSpotPositionStatus() {
   }
 
   try {
-    const res = await fetch(`/api/spot-status?symbol=${encodeURIComponent(symbol)}`);
+    const res = await fetch(`/api/spot/status?symbol=${encodeURIComponent(symbol)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Could not check position status.');
     renderPositionStatus(data);
@@ -738,7 +739,7 @@ async function fetchSpotPrice() {
   statusEl.className = 'price-status pending';
   el('fetchBtn').disabled = true;
   try {
-    const res = await fetch(`/api/spot-price?symbol=${encodeURIComponent(symbol)}`);
+    const res = await fetch(`/api/spot/price?symbol=${encodeURIComponent(symbol)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to fetch price.');
     if (!(Number(data.lastPrice) > 0)) {
@@ -886,7 +887,7 @@ async function closeSpotPosition() {
   }
 
   try {
-    const res = await fetch('/api/spot-close', {
+    const res = await fetch('/api/spot/close', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, baseAsset }),
@@ -1013,7 +1014,7 @@ async function fetchSpotBalance() {
   }
 
   try {
-    const res = await fetch('/api/spot-balance?asset=USDT');
+    const res = await fetch('/api/spot/balance?asset=USDT');
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to fetch balance.');
     const usable = Number(data.free);
@@ -1406,7 +1407,7 @@ async function executeSpotPlan() {
   }
 
   try {
-    const res = await fetch('/api/spot-execute', {
+    const res = await fetch('/api/spot/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ symbol, capital, orders }),
