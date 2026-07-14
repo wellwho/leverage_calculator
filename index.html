@@ -188,7 +188,7 @@
         <input id="entry" type="number" step="any" value="0.223" />
       </div>
       <div>
-        <label for="capital">Total capital ($)</label>
+        <label for="capital">Available balance ($)</label>
         <div class="price-row">
           <div><input id="capital" type="number" step="any" value="951" /></div>
           <button id="balanceBtn" class="secondary">Get balance</button>
@@ -315,7 +315,7 @@
         </table>
       </div>
       <div class="note" id="executeNote">
-        Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). As a last step, whatever of "Total capital" wasn't actually committed to a placed order gets added directly to the position as margin — computed from each order's real, exchange-rounded fill size rather than the plan's theoretical numbers, so it accounts for MEXC's contract-size rounding automatically.
+        Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). As a last step, whatever of "Available balance" wasn't actually committed to a placed order gets added directly to the position as margin — computed from each order's real, exchange-rounded fill size rather than the plan's theoretical numbers, so it accounts for MEXC's contract-size rounding automatically.
       </div>
     </div>
   </div>
@@ -443,7 +443,7 @@ const MODE_COPY = {
     coveredLabel: 'Drawdown covered',
     volHeader: 'Vol (contracts)',
     ladderNote: 'Fees and funding are ignored. Liquidation price uses MEXC\'s isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls; the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price.',
-    executeNote: 'Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). As a last step, whatever of "Total capital" wasn\'t actually committed to a placed order gets added directly to the position as margin — computed from each order\'s real, exchange-rounded fill size rather than the plan\'s theoretical numbers, so it accounts for MEXC\'s contract-size rounding automatically.',
+    executeNote: 'Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). As a last step, whatever of "Available balance" wasn\'t actually committed to a placed order gets added directly to the position as margin — computed from each order\'s real, exchange-rounded fill size rather than the plan\'s theoretical numbers, so it accounts for MEXC\'s contract-size rounding automatically.',
     dangerNote: 'Cancels every open order and flash-closes any open position on the asset entered above, at market, on MEXC. This is account-flattening for that one symbol only — it cannot be undone.',
     footer: 'Prices via MEXC Futures public ticker. Not financial advice.',
   },
@@ -453,7 +453,7 @@ const MODE_COPY = {
     drawdownLabel: 'Ladder depth (%)',
     coveredLabel: 'Ladder depth',
     volHeader: 'Qty',
-    ladderNote: 'Fees are ignored. There\'s no leverage or liquidation here — every dollar of "Total capital" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls, spaced evenly across the ladder down to the requested depth. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, so the two are directly comparable.',
+    ladderNote: 'Fees are ignored. There\'s no leverage or liquidation here — every dollar of "Available balance" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls, spaced evenly across the ladder down to the requested depth. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, so the two are directly comparable.',
     executeNote: 'Places every buy row above as a MEXC Spot order (market for Buy #1, limit for the rest), using the same <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> as the rest of this app — the key just needs Spot trading permission enabled too, alongside whatever Futures permissions it already has. No leverage, no margin: every dollar of capital goes straight into buy orders, full stop.',
     dangerNote: 'Cancels every open order and market-sells your ENTIRE free balance of the asset entered above back to USDT. This is account-flattening for that one asset only — it cannot be undone.',
     footer: 'Prices via MEXC Spot public ticker. Not financial advice.',
@@ -939,7 +939,7 @@ el('logoutBtn').addEventListener('click', async () => {
   window.location.href = '/login.html';
 });
 
-// Pulls the live MEXC usable balance into the Total capital field. Shared
+// Pulls the live MEXC usable balance into the Available balance field. Shared
 // by the "Get balance" button and the automatic page-load / tab-switch /
 // Reset refresh.
 async function fetchLiveBalance() {
@@ -972,21 +972,14 @@ async function fetchLeveragedBalance() {
     const usable = Number(data.availableOpen);
     // Compare against the *rounded* value we'd actually write into the
     // field, not the raw one — a dust balance like $0.003 passes `> 0` but
-    // still rounds to "0.00", which broke the calculator just the same.
+    // still rounds to "0.00" the same way a genuine $0 would.
     const usableRounded = Number(usable.toFixed(2));
-    const MIN_CAPITAL = 1; // $1 floor — anything below isn't a usable planning size anyway
-    if (usableRounded >= MIN_CAPITAL) {
-      el('capital').value = usableRounded.toFixed(2);
-      statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Futures)`;
-      statusEl.className = 'price-status ok';
-    } else {
-      // Near-$0 (or genuinely $0) usable is common while a position is
-      // already open and margin is tied up — don't overwrite Total capital
-      // with a value that would break the calculator; report the real
-      // number and leave the field as it was.
-      statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT — too low to use as capital; Total capital left unchanged.`;
-      statusEl.className = 'price-status err';
-    }
+    // Always reflect the real number, even $0.00 — a position tying up all
+    // margin is a normal state, not an error, so it gets the same "ok"
+    // styling as any other balance.
+    el('capital').value = usableRounded.toFixed(2);
+    statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Futures)`;
+    statusEl.className = 'price-status ok';
   } catch (err) {
     statusEl.textContent = err.message || 'Could not fetch balance — enter it manually.';
     statusEl.className = 'price-status err';
@@ -1019,15 +1012,9 @@ async function fetchSpotBalance() {
     if (!res.ok) throw new Error(data.error || 'Failed to fetch balance.');
     const usable = Number(data.free);
     const usableRounded = Number(usable.toFixed(2));
-    const MIN_CAPITAL = 1;
-    if (usableRounded >= MIN_CAPITAL) {
-      el('capital').value = usableRounded.toFixed(2);
-      statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Spot)`;
-      statusEl.className = 'price-status ok';
-    } else {
-      statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT — too low to use as capital; Total capital left unchanged.`;
-      statusEl.className = 'price-status err';
-    }
+    el('capital').value = usableRounded.toFixed(2);
+    statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Spot)`;
+    statusEl.className = 'price-status ok';
   } catch (err) {
     statusEl.textContent = err.message || 'Could not fetch balance — enter it manually.';
     statusEl.className = 'price-status err';

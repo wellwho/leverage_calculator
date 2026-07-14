@@ -134,7 +134,7 @@ The "Execute" card at the bottom of the calculated plan places every "Limit Buy"
 
 ## Pull available funds from MEXC
 
-The "Get balance" button next to Total capital calls `api/balance.js`, which signs a request to MEXC's `Get Single Currency Asset Information` endpoint for USDT and fills the Total capital field with **usable amount** (`availableOpen` — MEXC's figure for what you can actually deploy into a new position, distinct from total equity or withdrawable balance). Requires the same `MEXC_API_KEY` / `MEXC_API_SECRET` env vars as execution, plus the key's "View Account Details" permission.
+The "Get balance" button next to Available balance calls `api/balance.js`, which signs a request to MEXC's `Get Single Currency Asset Information` endpoint for USDT and fills the Available balance field with **usable amount** (`availableOpen` — MEXC's figure for what you can actually deploy into a new position, distinct from total equity or withdrawable balance). Requires the same `MEXC_API_KEY` / `MEXC_API_SECRET` env vars as execution, plus the key's "View Account Details" permission.
 
 ## Close Position (panic button)
 
@@ -287,6 +287,7 @@ It's also wired into `vercel.json` as the build step — `vercel` / `vercel --pr
 - Buy sizes grow geometrically (×1.26 per step); the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target.
 - Default drawdown coverage is 70%.
 - On page load and on Reset, the app automatically pulls the live MEXC price and your live usable balance (same as clicking "Get price" / "Get balance") before calculating, so the plan always starts from real numbers rather than the static fallback defaults (0.223 / $951) baked into the input fields.
-- If the auto-pulled usable balance comes back as $0 (common while a position is already open and margin is tied up) or the price comes back invalid, that field is left unchanged instead of being overwritten — a $0 capital would otherwise break the calculator's validation ("Entry price, leverage and capital must be positive").
+- The auto-pulled usable balance always overwrites the Available balance field, even if it comes back as $0.00 (common while a position is already open and margin is tied up) — you'll need to top up or close the position before calculating a new plan, since a $0 capital fails the calculator's validation ("Entry price, leverage and capital must be positive").
+- If the price comes back invalid, that field is left unchanged instead of being overwritten.
 
 Testing auto-deploy
