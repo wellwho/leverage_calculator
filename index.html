@@ -325,7 +325,7 @@
       </div>
     </div>
 
-  <div class="card danger-card">
+  <div class="card danger-card" id="dangerCard" style="display: none;">
     <h2>Danger Zone</h2>
     <div class="note" id="dangerNote" style="margin-top: 0; padding-top: 0; border-top: none; margin-bottom: 16px;">
       Cancels every open order and flash-closes any open position on the asset entered above, at market, on MEXC. This is account-flattening for that one symbol only — it cannot be undone.
@@ -514,6 +514,7 @@ el('tabSpot').addEventListener('click', () => setMode('spot'));
 function renderPositionStatus(data) {
   const statusCard = el('statusCard');
   const executeCard = el('executeCard');
+  const dangerCard = el('dangerCard');
 
   if (data.hasPosition && data.position) {
     const p = data.position;
@@ -588,9 +589,11 @@ function renderPositionStatus(data) {
 
     statusCard.style.display = '';
     executeCard.style.display = 'none';
+    dangerCard.style.display = '';
   } else {
     statusCard.style.display = 'none';
     executeCard.style.display = '';
+    dangerCard.style.display = 'none';
   }
 }
 
