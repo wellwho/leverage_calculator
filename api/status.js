@@ -165,6 +165,23 @@ module.exports = async (req, res) => {
         mmr,
         restingOrders,
       });
+
+      // MEXC's `vol`/`dealVol`/`holdVol` fields are contract counts, not
+      // base-asset (e.g. CRV) quantity — computePnl/computeProjectedLiquidation
+      // above correctly multiply by contractSize internally, but the raw
+      // orders[]/position payload sent to the client did not, so the UI's
+      // "Qty" column and "Position size" stat were displaying contract
+      // counts mislabeled as base-asset quantity. Convert here, once, after
+      // the calc functions above have already used the raw contract values,
+      // so index.html can treat every qty field as base-asset units
+      // consistently (same convention as demo mode's contractSize: 1 path).
+      if (contractSize) {
+        orders.forEach((o) => {
+          o.vol = o.vol * contractSize;
+          o.dealVol = o.dealVol * contractSize;
+        });
+        position.holdVol = holdVol * contractSize;
+      }
     } catch {
       // leave pnl / projectedLiquidation as null — position + orders are
       // still useful on their own.
