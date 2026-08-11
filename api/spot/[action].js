@@ -154,6 +154,29 @@ async function handleBalance(req, res, apiKey, secretKey) {
   }
 }
 
+// Live USDT free-balance lookup, called right before sizing each order below.
+// The plan's `capital` figure is a snapshot from whenever the "Available
+// balance" field was last refreshed in the browser — by the time later rows
+// in a 6-row ladder actually fire, the real free balance can have drifted a
+// few cents below what the plan assumed (e.g. it was fetched a bit earlier,
+// or MEXC's own rounding on an already-placed row locked slightly more than
+// this file's local price*qty math expected). Re-checking live, right before
+// each order, means a row gets sized to whatever's *actually* left instead
+// of blindly submitting the planned amount and letting MEXC hard-reject the
+// whole order with code 30004 ("Insufficient position" — MEXC's shared
+// insufficient-funds error, reused here from its futures wording) once the
+// account runs a few cents short.
+async function getFreeUsdt(apiKey, secretKey) {
+  try {
+    const data = await spotPrivateGet('/api/v3/account', {}, apiKey, secretKey);
+    if (!data || !Array.isArray(data.balances)) return null;
+    const entry = data.balances.find((b) => b.asset === 'USDT');
+    return entry ? Number(entry.free) : 0;
+  } catch {
+    return null; // best-effort — fall back to submitting the planned amount unclamped
+  }
+}
+
 // ---- execute: POST /api/spot/execute -----------------------------------
 // body: { symbol: "CRVUSDT", capital: 951, orders: [{ step, price, qty }, ...] }
 //   - price: trigger price (quote currency) — used as the LIMIT price for
@@ -166,7 +189,11 @@ async function handleBalance(req, res, apiKey, secretKey) {
 // fixed execution price to compute quantity from ahead of time — this way
 // the dollar amount actually spent always matches the plan exactly. Every
 // other row is a LIMIT buy resting at its ladder price, using `quantity`
-// (base units, rounded to the symbol's precision).
+// (base units, rounded to the symbol's precision). Every row's size is
+// clamped against the live free USDT balance right before submission (see
+// getFreeUsdt above) so a late row degrades to "buy whatever's actually
+// left" instead of failing outright when the real balance has drifted a bit
+// below the plan.
 async function handleExecute(req, res, apiKey, secretKey) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Use POST.' });
@@ -215,7 +242,14 @@ async function handleExecute(req, res, apiKey, secretKey) {
       // Market buy: spend the planned dollar amount exactly via
       // quoteOrderQty, rather than pre-computing a base quantity against a
       // ticker price that may have already moved.
-      const quoteOrderQty = Number((order.price * order.qty).toFixed(quotePrecision));
+      let quoteOrderQty = Number((order.price * order.qty).toFixed(quotePrecision));
+      const freeUsdt = await getFreeUsdt(apiKey, secretKey);
+      if (freeUsdt !== null) quoteOrderQty = Math.min(quoteOrderQty, Number(freeUsdt.toFixed(quotePrecision)));
+      if (!(quoteOrderQty > 0)) {
+        results.push({ step: order.step, price, qty: null, quoteOrderQty: 0, orderType: 'market', success: false, orderId: null, error: 'Skipped — no USDT balance left to spend.' });
+        await new Promise((r) => setTimeout(r, ORDER_SPACING_MS));
+        continue;
+      }
       const body = { symbol, side: 'BUY', type: 'MARKET', quoteOrderQty };
       try {
         const data = await spotPrivatePost('/api/v3/order', body, apiKey, secretKey);
@@ -235,7 +269,21 @@ async function handleExecute(req, res, apiKey, secretKey) {
         results.push({ step: order.step, price, qty: null, quoteOrderQty, orderType: 'market', success: false, orderId: null, error: String(err.message || err) });
       }
     } else {
-      const qty = Number(order.qty.toFixed(baseAssetPrecision));
+      let qty = Number(order.qty.toFixed(baseAssetPrecision));
+      const freeUsdt = await getFreeUsdt(apiKey, secretKey);
+      if (freeUsdt !== null) {
+        const factor = Math.pow(10, baseAssetPrecision);
+        // Floor (never round up) — the safe direction when clamping against
+        // a hard balance cap, same reasoning as handleClose's sell-side
+        // rounding below.
+        const maxAffordableQty = Math.floor((freeUsdt / price) * factor) / factor;
+        qty = Math.min(qty, maxAffordableQty);
+      }
+      if (!(qty > 0)) {
+        results.push({ step: order.step, price, qty: 0, orderType: 'limit', success: false, orderId: null, error: 'Skipped — no USDT balance left to spend.' });
+        await new Promise((r) => setTimeout(r, ORDER_SPACING_MS));
+        continue;
+      }
       const body = { symbol, side: 'BUY', type: 'LIMIT', quantity: qty, price };
       try {
         const data = await spotPrivatePost('/api/v3/order', body, apiKey, secretKey);
