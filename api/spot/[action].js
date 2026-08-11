@@ -14,7 +14,14 @@ const { computePnl } = require('../../statusCalc.js');
 
 const BASE_URL = 'https://api.mexc.com';
 const RECV_WINDOW = 10000;
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+// A few minutes shy of the true 7-day boundary, not exactly 7 days: MEXC
+// hard-rejects allOrders with "Only 7 day's data can be queried" if the gap
+// between `startTime` and whatever it treats as "now" exceeds 7 days by even
+// a little — and the gap between this serverless function computing
+// Date.now() and MEXC's server actually evaluating that check (network
+// latency, serverless cold start, clock drift) is enough to trip an exact
+// 7*24*60*60*1000 window in practice.
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000 - 5 * 60 * 1000;
 const ORDER_SPACING_MS = 550; // no MEXC-documented per-second cap on this endpoint; matches the Futures integration's conservative pacing
 
 // ---- Shared MEXC Spot v3 signing helpers -----------------------------
