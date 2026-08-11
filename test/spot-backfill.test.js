@@ -1,13 +1,19 @@
 // Backfill validation for calc.js's computeSpotPlan (the Spot DCA ladder —
 // no leverage, no margin buffer, no liquidation).
 //
-// Fixture A reuses the exact same inputs as test/backfill.test.js's proven
+// Fixture A reuses the exact same inputs as test/backfill.test.js's old
 // reference plan (entry 0.223, capital 951, 12 buys, 95% drawdown target),
 // minus leverage/mmr, so the two tests double as a cross-check that both
-// ladders trigger at identical prices — verified independently before these
-// numbers were pinned here (see calc.js's buildLadderShape comment). Values
-// below were hand-recomputed via an independent cumulative-notional/qty walk
-// over the same rows, not just re-read from computeSpotPlan's own output.
+// ladders trigger at identical prices — still true under the current
+// sweet-spot-peaked buy shape, since buildLadderShape's trigger-price/
+// drawdown math is untouched; only the per-buy weight shape changed. The
+// finalQty/finalAvgEntry values below reflect that new hump shape (buy sizes
+// peaking at the rung nearest -35% drawdown rather than growing monotonically
+// the whole way), re-read from computeSpotPlan directly since there's no
+// external spreadsheet for the new shape — see calc.js's header comment.
+// Fixture B's numbers are untouched from before: at a 30%/3-buy ladder the
+// -35% sweet spot sits beyond the ladder's own reach, so the peak clamps to
+// the last buy and the shape degenerates to the old pure-growth math exactly.
 //
 // Run manually:   npm test        (or: node test/spot-backfill.test.js)
 // Run on deploy:  wired into vercel.json's buildCommand — see README.
@@ -38,10 +44,11 @@ console.log('\nFixture A — 12-buy spot ladder, $951 capital, $0.223 entry, 95%
   check('rows.length', r.rows.length, 12);
   check('totalBuys', r.totalBuys, 951);
   check('totalDeployed', r.totalDeployed, 951);
-  check('finalQty', r.finalQty, 16745.319147286042);
-  check('finalAvgEntry', r.finalAvgEntry, 0.0567922680412371);
+  check('finalQty', r.finalQty, 8484.071368820545);
+  check('finalAvgEntry', r.finalAvgEntry, 0.11209240925235259);
   check('lowestPrice', r.lowestPrice, 0.028804166666666666);
   check('ladderDepth', r.ladderDepth, 0.8708333333333333);
+  check('peakIdx (rung nearest -35% drawdown)', r.peakIdx, 4);
   // First and last row trigger prices, cross-checked against the leveraged
   // plan's own "Limit Buy" rows for the identical inputs — same
   // buildLadderShape call, so these must land on the same points.
@@ -49,12 +56,19 @@ console.log('\nFixture A — 12-buy spot ladder, $951 capital, $0.223 entry, 95%
   check('rows[11].price (== lowestPrice)', r.rows[11].price, 0.028804166666666666);
 }
 
-console.log('\nFixture B — small ladder (3 buys), sanity-checks the geometric weighting directly by hand');
+console.log('\nFixture B — small ladder (3 buys, 30% depth), sanity-checks the geometric weighting directly by hand');
 {
+  // This ladder only reaches a 20% drawdown at its last buy (30% depth / 3
+  // buys, spaced evenly, leaving one spacing unit of buffer) — short of the
+  // 35% sweet spot, so the peak clamps to the last buy and every weight is
+  // still plain r^i, same as this calculator's shape before the sweet-spot
+  // change. That's what this fixture is really checking: the degenerate case
+  // still matches pure geometric growth exactly.
   const r = computeSpotPlan({ entry: 100, capital: 1000, numBuys: 3, targetDrawdownPct: 30 });
   // Hand check: spacing = 30/3 = 10%, drawdowns = [0, 10%, 20%], prices = [100, 90, 80].
   // K1 = 1 + 1.26 + 1.26^2 = 1 + 1.26 + 1.5876 = 3.8476
   // E1 = 1000 / 3.8476 = 259.9021...
+  check('peakIdx (sweet spot beyond range, clamps to last buy)', r.peakIdx, 2);
   check('rows[0].price', r.rows[0].price, 100);
   check('rows[1].price', r.rows[1].price, 90);
   check('rows[2].price', r.rows[2].price, 80);
@@ -71,6 +85,31 @@ console.log('\nFixture B — small ladder (3 buys), sanity-checks the geometric 
   const avgEntry = (buy1 + buy2 + buy3) / totalQty;
   check('finalQty', r.finalQty, totalQty);
   check('finalAvgEntry', r.finalAvgEntry, avgEntry);
+}
+
+console.log('\nFixture D — small ladder (3 buys, 90% depth) with an interior sweet-spot peak, hand-verified');
+{
+  // spacing = 90/3 = 30%, drawdowns = [0%, 30%, 60%], prices = [100, 70, 40].
+  // peakIdx = round(35/30) = round(1.1667) = 1 (the middle buy) — interior,
+  // unlike Fixture B. Weights: i=0 -> r^0 = 1; i=1 (peak) -> r^1 = 1.26;
+  // i=2 -> r^1 * (1/r)^1 = 1.26 * (1/1.26) = 1 — symmetric in log-space, so
+  // the last buy's weight lands back on exactly the first buy's weight.
+  // K1 = 1 + 1.26 + 1 = 3.26. E1 = 1000/3.26 = 306.7484662576687...
+  const r = computeSpotPlan({ entry: 100, capital: 1000, numBuys: 3, targetDrawdownPct: 90 });
+  check('peakIdx', r.peakIdx, 1);
+  check('rows[0].price', r.rows[0].price, 100);
+  check('rows[1].price', r.rows[1].price, 70);
+  check('rows[2].price', r.rows[2].price, 40);
+  const K1 = 1 + 1.26 + 1;
+  const E1 = 1000 / K1;
+  const buy1 = E1, buy2 = E1 * 1.26, buy3 = E1;
+  check('rows[0].amount', r.rows[0].amount, buy1);
+  check('rows[1].amount (peak — biggest buy)', r.rows[1].amount, buy2);
+  check('rows[2].amount (back down to rows[0]\'s size)', r.rows[2].amount, buy3);
+  check('rows[0].isPeak', r.rows[0].isPeak, false);
+  check('rows[1].isPeak', r.rows[1].isPeak, true);
+  check('rows[2].isPeak', r.rows[2].isPeak, false);
+  check('totalBuys == capital', r.totalBuys, 1000);
 }
 
 console.log('\nFixture C — error paths');

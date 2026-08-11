@@ -146,7 +146,7 @@ module.exports = async (req, res) => {
 
       const holdAvgPrice = Number(position.holdAvgPrice);
       const holdVol = Number(position.holdVol); // contracts
-      const im = Number(position.im); // current total margin — reflects manual top-ups
+      const im = Number(position.im); // current total margin — reflects any top-up, manual or via MEXC's Auto-Margin
       const leverage = Number(position.leverage) || 1;
       const isLong = Number(position.positionType) === 1;
 

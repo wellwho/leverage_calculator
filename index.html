@@ -141,7 +141,9 @@
   th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
   tbody tr:hover { background: rgba(255,255,255,0.02); }
   .action-buy { color: var(--text); }
-  .action-margin { color: var(--accent2); font-weight: 600; }
+  .action-peak { color: var(--accent2); font-weight: 600; }
+  .auto-margin-yes { color: var(--accent2); }
+  .auto-margin-no { color: var(--muted); }
   .table-scroll { overflow-x: auto; }
   .results { display: none; }
   .note {
@@ -159,8 +161,8 @@
 <div class="wrap">
   <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
     <div>
-      <h1 id="pageTitle">Leveraged DCA Ladder Calculator</h1>
-      <div class="subtitle" id="pageSubtitle">Isolated-margin laddered buys sized to survive a target drawdown before liquidation. Live prices from MEXC Futures.</div>
+      <h1 id="pageTitle">Spot DCA Ladder Calculator</h1>
+      <div class="subtitle" id="pageSubtitle">Plain dollar-cost-averaging buys — no leverage, no margin, no liquidation. Live prices from MEXC Spot.</div>
     </div>
     <button id="logoutBtn" class="secondary" style="flex: 0 0 auto; margin-top: 2px;">Log out</button>
   </div>
@@ -168,8 +170,8 @@
   <div id="demoBanner" class="demo-banner">DEMO MODE — all balances, positions and orders on this page are simulated. No real MEXC account is connected and no real trades are ever placed.</div>
 
   <div class="tabs">
-    <button id="tabLeveraged" class="tab-btn active">Leveraged</button>
-    <button id="tabSpot" class="tab-btn">Spot DCA</button>
+    <button id="tabLeveraged" class="tab-btn">Leveraged</button>
+    <button id="tabSpot" class="tab-btn active">Spot DCA</button>
   </div>
 
   <div class="card">
@@ -195,7 +197,7 @@
         </div>
         <div id="balanceStatus" class="price-status"></div>
       </div>
-      <div id="leverageField">
+      <div id="leverageField" style="display: none;">
         <label for="leverage">Leverage (x)</label>
         <input id="leverage" type="number" step="any" value="5" />
       </div>
@@ -206,12 +208,16 @@
         <input id="numBuys" type="number" step="1" min="1" max="30" value="12" />
       </div>
       <div>
-        <label for="targetDrawdown" id="targetDrawdownLabel">Drawdown coverage (%)</label>
+        <label for="targetDrawdown" id="targetDrawdownLabel">Ladder depth (%)</label>
         <input id="targetDrawdown" type="number" step="any" min="1" max="99" value="70" />
       </div>
-      <div id="mmrField">
+      <div id="mmrField" style="display: none;">
         <label for="mmr">Maintenance margin rate (%)</label>
         <input id="mmr" type="number" step="any" value="1" />
+      </div>
+      <div id="spotPeakField">
+        <label for="spotPeak">Peak buy drawdown (%)</label>
+        <input id="spotPeak" type="number" step="any" min="1" max="99" value="35" />
       </div>
     </div>
     <div class="calc-btn-row">
@@ -228,12 +234,13 @@
       <h2>Summary</h2>
       <div class="summary-grid">
         <div class="stat"><div class="label">Total buys ($)</div><div class="value" id="sumBuys">—</div></div>
-        <div class="stat" id="sumMarginStat"><div class="label">Margin add ($)</div><div class="value" id="sumMargin">—</div></div>
+        <div class="stat" id="sumMarginStat" style="display: none;"><div class="label">Margin buffer ($)</div><div class="value" id="sumMargin">—</div></div>
         <div class="stat"><div class="label">Total deployed ($)</div><div class="value" id="sumDeployed">—</div></div>
         <div class="stat"><div class="label">Final qty</div><div class="value" id="sumQty">—</div></div>
         <div class="stat"><div class="label">Final avg entry ($)</div><div class="value" id="sumAvg">—</div></div>
-        <div class="stat" id="sumLiqStat"><div class="label">Final liquidation ($)</div><div class="value liq" id="sumLiq">—</div></div>
-        <div class="stat"><div class="label" id="sumCoveredLabel">Drawdown covered</div><div class="value cov" id="sumCovered">—</div></div>
+        <div class="stat" id="sumNaiveLiqStat" style="display: none;"><div class="label">Liq. if reserve untouched ($)</div><div class="value liq" id="sumNaiveLiq">—</div></div>
+        <div class="stat" id="sumLiqStat" style="display: none;"><div class="label">Target liquidation ($)</div><div class="value liq" id="sumLiq">—</div></div>
+        <div class="stat"><div class="label" id="sumCoveredLabel">Ladder depth</div><div class="value cov" id="sumCovered">—</div></div>
       </div>
     </div>
 
@@ -251,14 +258,15 @@
               <th>New qty</th>
               <th>Cumulative qty</th>
               <th>Avg entry ($)</th>
-              <th id="liqColHeader">Liquidation ($)</th>
+              <th id="liqColHeader" style="display: none;">Liquidation ($)</th>
+              <th id="autoMarginColHeader" style="display: none;">Needs auto-margin?</th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
       <div class="note" id="ladderNote">
-        Fees and funding are ignored. Liquidation price uses MEXC's isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls; the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price.
+        Fees are ignored. There's no leverage or liquidation here — every dollar of "Available balance" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) up to the buy nearest the "Peak buy drawdown" set above (default -35%), then shrink geometrically beyond it, spaced evenly across the ladder down to the requested depth. If the peak drawdown falls beyond the ladder's own reach, it clamps to the last buy and sizing grows the whole way instead. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, and the same buy-size shape when the peak is left at its default.
       </div>
     </div>
   </div>
@@ -273,10 +281,10 @@
       <div class="summary-grid">
         <div class="stat"><div class="label">Avg entry ($)</div><div class="value" id="posAvgEntry">—</div></div>
         <div class="stat"><div class="label">Position size</div><div class="value" id="posQty">—</div></div>
-        <div class="stat" id="posLeverageStat"><div class="label">Leverage</div><div class="value" id="posLeverage">—</div></div>
+        <div class="stat" id="posLeverageStat" style="display: none;"><div class="label">Leverage</div><div class="value" id="posLeverage">—</div></div>
         <div class="stat"><div class="label">Unrealized P&amp;L ($)</div><div class="value" id="posPnlDollar">—</div></div>
         <div class="stat"><div class="label">Unrealized P&amp;L (%)</div><div class="value" id="posPnlPercent">—</div></div>
-        <div class="stat" id="posLiqStat"><div class="label">Liq. if fully filled ($)</div><div class="value liq" id="posLiq">—</div></div>
+        <div class="stat" id="posLiqStat" style="display: none;"><div class="label">Liq. if fully filled ($)</div><div class="value liq" id="posLiq">—</div></div>
       </div>
       <div class="calc-btn-row" style="align-items: center;">
         <button id="refreshStatusBtn" class="secondary">Refresh status</button>
@@ -313,7 +321,7 @@
             <tr>
               <th>Step</th>
               <th>Price ($)</th>
-              <th id="execVolHeader">Vol (contracts)</th>
+              <th id="execVolHeader">Qty</th>
               <th>Result</th>
             </tr>
           </thead>
@@ -321,14 +329,14 @@
         </table>
       </div>
       <div class="note" id="executeNote">
-        Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). As a last step, whatever of "Available balance" wasn't actually committed to a placed order gets added directly to the position as margin — computed from each order's real, exchange-rounded fill size rather than the plan's theoretical numbers, so it accounts for MEXC's contract-size rounding automatically.
+        Places every buy row above as a MEXC Spot order (market for Buy #1, limit for the rest), using the same <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> as the rest of this app — the key just needs Spot trading permission enabled too, alongside whatever Futures permissions it already has. No leverage, no margin: every dollar of capital goes straight into buy orders, full stop.
       </div>
     </div>
 
   <div class="card danger-card" id="dangerCard" style="display: none;">
     <h2>Danger Zone</h2>
     <div class="note" id="dangerNote" style="margin-top: 0; padding-top: 0; border-top: none; margin-bottom: 16px;">
-      Cancels every open order and flash-closes any open position on the asset entered above, at market, on MEXC. This is account-flattening for that one symbol only — it cannot be undone.
+      Cancels every open order and market-sells your ENTIRE free balance of the asset entered above back to USDT. This is account-flattening for that one asset only — it cannot be undone.
     </div>
     <button id="closeBtn" class="danger-btn">Close position</button>
     <div id="closeStatus" class="price-status" style="margin-top: 10px;"></div>
@@ -346,7 +354,7 @@
     </div>
   </div>
 
-  <footer id="footerNote">Prices via MEXC Futures public ticker. Not financial advice.</footer>
+  <footer id="footerNote">Prices via MEXC Spot public ticker. Not financial advice.</footer>
 </div>
 
 <script src="calc.js"></script>
@@ -369,7 +377,7 @@ let lastPlan = null;
 // (plain DCA, no leverage/margin/liquidation at all). Nearly every handler
 // below dispatches on this first, then (for the real, non-demo path) on
 // demoMode second.
-let mode = 'leveraged';
+let mode = 'spot';
 
 // Demo mode — set via the DEMO_MODE env var on a *separate* Vercel project
 // pointed at this same repo (see README's "Demo instance" section). When
@@ -447,8 +455,8 @@ const MODE_COPY = {
     drawdownLabel: 'Drawdown coverage (%)',
     coveredLabel: 'Drawdown covered',
     volHeader: 'Vol (contracts)',
-    ladderNote: 'Fees and funding are ignored. Liquidation price uses MEXC\'s isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls; the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price.',
-    executeNote: 'Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). As a last step, whatever of "Available balance" wasn\'t actually committed to a placed order gets added directly to the position as margin — computed from each order\'s real, exchange-rounded fill size rather than the plan\'s theoretical numbers, so it accounts for MEXC\'s contract-size rounding automatically.',
+    ladderNote: 'Fees and funding are ignored. Liquidation price uses MEXC\'s isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) up to the buy nearest -35% drawdown — the "sweet spot" this plan wants to buy the most at — then shrink geometrically beyond it. The ladder is still spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target. The "Liquidation ($)" column is the real, immediate price using only committed buy margin — it ignores the untouched margin buffer, which this app never injects into the position itself; "Needs auto-margin" rows are ones relying on MEXC\'s own Auto-Margin feature to draw from that buffer before the next buy. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price.',
+    executeNote: 'Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). Whatever of "Available balance" wasn\'t actually committed to a placed order — computed from each order\'s real, exchange-rounded fill size rather than the plan\'s theoretical numbers — is reported back as informational only, and stays in your futures wallet. This app never adds it to the position itself: it\'s left there for MEXC\'s own Auto-Margin feature (enable it on the position in the MEXC app) to draw on automatically if liquidation becomes imminent.',
     dangerNote: 'Cancels every open order and flash-closes any open position on the asset entered above, at market, on MEXC. This is account-flattening for that one symbol only — it cannot be undone.',
     footer: 'Prices via MEXC Futures public ticker. Not financial advice.',
   },
@@ -458,7 +466,7 @@ const MODE_COPY = {
     drawdownLabel: 'Ladder depth (%)',
     coveredLabel: 'Ladder depth',
     volHeader: 'Qty',
-    ladderNote: 'Fees are ignored. There\'s no leverage or liquidation here — every dollar of "Available balance" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) so the position scales up as price falls, spaced evenly across the ladder down to the requested depth. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, so the two are directly comparable.',
+    ladderNote: 'Fees are ignored. There\'s no leverage or liquidation here — every dollar of "Available balance" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) up to the buy nearest the "Peak buy drawdown" set above (default -35%), then shrink geometrically beyond it, spaced evenly across the ladder down to the requested depth. If the peak drawdown falls beyond the ladder\'s own reach, it clamps to the last buy and sizing grows the whole way instead. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, and the same buy-size shape when the peak is left at its default.',
     executeNote: 'Places every buy row above as a MEXC Spot order (market for Buy #1, limit for the rest), using the same <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> as the rest of this app — the key just needs Spot trading permission enabled too, alongside whatever Futures permissions it already has. No leverage, no margin: every dollar of capital goes straight into buy orders, full stop.',
     dangerNote: 'Cancels every open order and market-sells your ENTIRE free balance of the asset entered above back to USDT. This is account-flattening for that one asset only — it cannot be undone.',
     footer: 'Prices via MEXC Spot public ticker. Not financial advice.',
@@ -485,9 +493,12 @@ function setMode(newMode) {
 
   el('leverageField').style.display = isSpot ? 'none' : '';
   el('mmrField').style.display = isSpot ? 'none' : '';
+  el('spotPeakField').style.display = isSpot ? '' : 'none';
   el('sumMarginStat').style.display = isSpot ? 'none' : '';
+  el('sumNaiveLiqStat').style.display = isSpot ? 'none' : '';
   el('sumLiqStat').style.display = isSpot ? 'none' : '';
   el('liqColHeader').style.display = isSpot ? 'none' : '';
+  el('autoMarginColHeader').style.display = isSpot ? 'none' : '';
   el('posLeverageStat').style.display = isSpot ? 'none' : '';
   el('posLiqStat').style.display = isSpot ? 'none' : '';
 
@@ -1077,25 +1088,32 @@ function calculateLeveragedPlan() {
   el('sumDeployed').textContent = `$${fmt2(result.totalDeployed)}`;
   el('sumQty').textContent = fmtQty(result.finalQty);
   el('sumAvg').textContent = `$${fmtPrice(result.finalAvgEntry)}`;
-  el('sumLiq').textContent = `$${fmtPrice(result.finalLiq)}`;
+  el('sumNaiveLiq').textContent = `$${fmtPrice(result.naiveFinalLiq)}`;
+  el('sumLiq').textContent = `$${fmtPrice(result.protectedFinalLiq)}`;
   el('sumCovered').textContent = `${(result.drawdownCovered * 100).toFixed(2)}%`;
 
   const tbody = document.querySelector('#planTable tbody');
   tbody.innerHTML = '';
   result.rows.forEach((row) => {
     const tr = document.createElement('tr');
-    const isMargin = row.action === 'Add Margin';
+    // Peak (sweet-spot) row gets the emphasis styling that used to mark the
+    // "Add Margin" row — this app no longer has an active margin-add step;
+    // the peak buy is now the visually-flagged row instead.
     const displayAction = row.step === 1 ? 'Market Buy #1' : row.action;
+    const autoMarginCell = row.autoMarginNeeded
+      ? '<span class="auto-margin-yes">Yes</span>'
+      : '<span class="auto-margin-no">No</span>';
     tr.innerHTML = `
       <td>${row.step}</td>
-      <td class="${isMargin ? 'action-margin' : 'action-buy'}">${displayAction}</td>
+      <td class="${row.isPeak ? 'action-peak' : 'action-buy'}">${displayAction}${row.isPeak ? ' ★' : ''}</td>
       <td>$${fmtPrice(row.price)}</td>
       <td>${(row.drawdown * 100).toFixed(2)}%</td>
       <td>$${fmt2(row.amount)}</td>
       <td>${row.newQty ? fmtQty(row.newQty) : '—'}</td>
       <td>${fmtQty(row.cumQty)}</td>
       <td>$${fmtPrice(row.avgEntry)}</td>
-      <td>${row.liq === null ? 'n/a — nothing at risk yet' : `$${fmtPrice(row.liq)}`}</td>
+      <td>$${fmtPrice(row.liq)}</td>
+      <td>${autoMarginCell}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -1114,6 +1132,7 @@ function calculateSpotPlan() {
     capital: parseFloat(el('capital').value),
     numBuys: parseInt(el('numBuys').value, 10),
     targetDrawdownPct: parseFloat(el('targetDrawdown').value),
+    sweetSpotDrawdownPct: parseFloat(el('spotPeak').value),
   };
 
   if (Object.values(params).some((v) => Number.isNaN(v))) {
@@ -1149,7 +1168,7 @@ function calculateSpotPlan() {
     const displayAction = row.step === 1 ? 'Market Buy #1' : row.action;
     tr.innerHTML = `
       <td>${row.step}</td>
-      <td class="action-buy">${displayAction}</td>
+      <td class="${row.isPeak ? 'action-peak' : 'action-buy'}">${displayAction}${row.isPeak ? ' ★' : ''}</td>
       <td>$${fmtPrice(row.price)}</td>
       <td>${(row.drawdown * 100).toFixed(2)}%</td>
       <td>$${fmt2(row.amount)}</td>
@@ -1190,8 +1209,8 @@ async function executeLeveragedPlan() {
   const capital = parseFloat(el('capital').value);
   const limitCount = orders.filter((o) => !o.market).length;
   const confirmMsg = demoMode
-    ? `Simulate 1 market buy + ${limitCount} limit buy orders for ${symbol} (isolated, ${leverage}x), then simulate adding whatever capital is left over as margin? This is a demo — no real funds or account involved.`
-    : `Place 1 market buy + ${limitCount} limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x), then add whatever capital is left over directly to the position as margin? This uses real funds.`;
+    ? `Simulate 1 market buy + ${limitCount} limit buy orders for ${symbol} (isolated, ${leverage}x)? This is a demo — no real funds or account involved.`
+    : `Place 1 market buy + ${limitCount} limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x)? This uses real funds. Any leftover capital stays in your futures balance for MEXC's Auto-Margin feature to draw on before liquidation.`;
   const ok = confirm(confirmMsg);
   if (!ok) return;
 
@@ -1204,14 +1223,15 @@ async function executeLeveragedPlan() {
   if (demoMode) {
     // Fill the market buy immediately, leave the rest resting — same shape
     // as a real fresh Execute — and store it as this browser's simulated
-    // position. No network call, nothing touches MEXC. Mirrors the real
-    // backend's remaining-capital margin step: whatever of `capital` isn't
-    // committed to the (simulated) orders above gets added straight to the
-    // simulated position's margin.
+    // position. No network call, nothing touches MEXC. Whatever of `capital`
+    // isn't committed to the (simulated) orders stays out of the simulated
+    // position's margin entirely, mirroring the real backend: it's left as
+    // available balance for MEXC's (assumed-reliable) Auto-Margin feature to
+    // draw on before liquidation, not pushed in proactively by this app.
     const mmr = parseFloat(el('mmr').value) / 100;
     const marketOrder = orders.find((o) => o.market);
     const committedMargin = orders.reduce((sum, o) => sum + (o.price * o.qty) / leverage, 0);
-    const remaining = Math.max(0, (capital || 0) - committedMargin);
+    const leftoverCapital = Math.max(0, (capital || 0) - committedMargin);
     const marketMargin = (marketOrder.price * marketOrder.qty) / leverage;
 
     const account = loadDemoAccount();
@@ -1221,7 +1241,7 @@ async function executeLeveragedPlan() {
       holdVol: marketOrder.qty,
       leverage,
       mmr,
-      im: marketMargin + remaining,
+      im: marketMargin,
       sinceTime: Date.now(),
       orders: orders.map((o) => ({
         orderId: `DEMO-${o.step}`,
@@ -1237,7 +1257,10 @@ async function executeLeveragedPlan() {
     };
     saveDemoAccount(account);
 
-    statusEl.textContent = `${orders.length}/${orders.length} orders simulated successfully. $${fmt2(remaining)} added as margin (simulated).`;
+    statusEl.textContent = `${orders.length}/${orders.length} orders simulated successfully.`;
+    if (leftoverCapital > 0.01) {
+      statusEl.textContent += ` $${fmt2(leftoverCapital)} of capital wasn't committed to an order — still sitting in your (simulated) futures balance.`;
+    }
     statusEl.className = 'price-status ok';
     orders.forEach((o) => {
       const tr = document.createElement('tr');
@@ -1250,14 +1273,6 @@ async function executeLeveragedPlan() {
       `;
       tbody.appendChild(tr);
     });
-    const marginTr = document.createElement('tr');
-    marginTr.innerHTML = `
-      <td>Add Margin</td>
-      <td>$${fmt2(remaining)}</td>
-      <td>—</td>
-      <td style="color: var(--green); text-align: left;">Added to position (simulated)</td>
-    `;
-    tbody.appendChild(marginTr);
     table.style.display = '';
     el('executeBtn').disabled = false;
     checkPositionStatus();
@@ -1275,15 +1290,10 @@ async function executeLeveragedPlan() {
 
     const successCount = data.results.filter((r) => r.success).length;
     statusEl.textContent = `${successCount}/${data.results.length} orders placed successfully.`;
-    if (data.marginAdd && data.marginAdd.attempted) {
-      statusEl.textContent += data.marginAdd.success
-        ? ` $${fmt2(data.marginAdd.amount)} added as margin.`
-        : ` Margin add failed — add $${fmt2(data.marginAdd.amount)} manually in the MEXC app.`;
-    } else if (data.marginAdd && data.marginAdd.reason) {
-      statusEl.textContent += ` Margin step skipped: ${data.marginAdd.reason}`;
+    if (data.leftoverCapital !== null && data.leftoverCapital !== undefined && data.leftoverCapital > 0.01) {
+      statusEl.textContent += ` $${fmt2(data.leftoverCapital)} of capital wasn't committed to an order (rounding/precision) — still sitting in your futures balance.`;
     }
-    const allOk = successCount === data.results.length && (!data.marginAdd || data.marginAdd.attempted === false || data.marginAdd.success);
-    statusEl.className = allOk ? 'price-status ok' : 'price-status err';
+    statusEl.className = successCount === data.results.length ? 'price-status ok' : 'price-status err';
 
     data.results.forEach((r) => {
       const tr = document.createElement('tr');
@@ -1296,28 +1306,6 @@ async function executeLeveragedPlan() {
       `;
       tbody.appendChild(tr);
     });
-    if (data.marginAdd) {
-      const m = data.marginAdd;
-      const tr = document.createElement('tr');
-      let resultText, color;
-      if (!m.attempted) {
-        resultText = m.reason || 'Skipped';
-        color = 'var(--muted)';
-      } else if (m.success) {
-        resultText = `Added to position${m.positionId ? ` (${m.positionId})` : ''}`;
-        color = 'var(--green)';
-      } else {
-        resultText = m.error || 'Failed';
-        color = 'var(--red)';
-      }
-      tr.innerHTML = `
-        <td>Add Margin</td>
-        <td>${m.amount === null || m.amount === undefined ? '—' : `$${fmt2(m.amount)}`}</td>
-        <td>—</td>
-        <td style="color: ${color}; text-align: left;">${resultText}</td>
-      `;
-      tbody.appendChild(tr);
-    }
     table.style.display = '';
   } catch (err) {
     statusEl.textContent = err.message || 'Execution failed.';
@@ -1447,6 +1435,7 @@ el('resetBtn').addEventListener('click', async () => {
   el('capital').value = '951';
   el('leverage').value = '5';
   el('mmr').value = '1';
+  el('spotPeak').value = '35';
   el('priceStatus').textContent = '';
   el('balanceStatus').textContent = '';
   el('errorBox').style.display = 'none';

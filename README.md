@@ -9,13 +9,13 @@ Live entry price pulled from MEXC (Futures ticker for the Leveraged tab, Spot ti
 
 ## Files
 - `index.html` — UI (inputs + results table), with a Leveraged/Spot tab switch
-- `calc.js` — calculation engine: `computePlan` (leveraged) and `computeSpotPlan` (spot), sharing a `buildLadderShape` helper so both tabs trigger at identical prices for the same inputs
+- `calc.js` — calculation engine: `computePlan` (leveraged) and `computeSpotPlan` (spot), sharing a `buildLadderShape` helper so both tabs trigger at identical prices, with identically-shaped buy sizes (peaking at a -35% drawdown "sweet spot"), for the same inputs
 - `statusCalc.js` — P&L / projected-liquidation math (shared by `api/status.js` server-side and, in demo mode, by `index.html` client-side)
 - `api/config.js` — tells `index.html` whether this deployment is running in demo mode
 
 ### Leveraged (MEXC Futures)
 - `api/price.js` — proxies MEXC's futures ticker (avoids browser CORS)
-- `api/execute.js` — places the ladder's limit buy orders on MEXC Futures, then adds leftover capital as margin
+- `api/execute.js` — places the ladder's limit buy orders on MEXC Futures; leftover capital is reported back only, never added to the position
 - `api/balance.js` — fetches your available USDT futures balance
 - `api/close.js` — behind the "Close Position" panic button
 - `api/status.js` — reports whether a position is open and how the ladder's orders have filled
@@ -111,7 +111,9 @@ If you own a domain name: in your browser go to vercel.com, log in, open this pr
 
 ## Execute plan on MEXC (auto-place orders)
 
-The "Execute" card at the bottom of the calculated plan places every "Limit Buy" row as an isolated-margin, open-long limit order on MEXC Futures via `api/execute.js`, then automatically adds whatever capital is left over directly to the position as margin.
+The "Execute" card at the bottom of the calculated plan places every "Limit Buy" row as an isolated-margin, open-long limit order on MEXC Futures via `api/execute.js`.
+
+This app does **not** add margin to the position itself. It assumes MEXC's own **Auto-Margin** feature (enable it on the position in the MEXC app after opening it) will pull from your available futures balance and top up margin before liquidation, whenever it's imminent. The "Margin buffer" figure in the plan (`calc.js`'s `margin`/"Add Margin" row, shown as "Margin Buffer" in the table) is still computed and sized the same way — it's what determines the plan's target liquidation drawdown — but it's just left as available balance in your futures wallet rather than being pushed into the position by this app.
 
 ### One-time setup
 
@@ -122,14 +124,15 @@ The "Execute" card at the bottom of the calculated plan places every "Limit Buy"
    - `MEXC_API_KEY` = your Access Key
    - `MEXC_API_SECRET` = your Secret Key
    - Redeploy (`vercel --prod`) after adding them — env vars only take effect on the next deploy.
-3. That's it — the key never touches the browser. `Execute plan on MEXC` calls `/api/execute`, which reads the key server-side and signs each request.
+3. **Enable Auto-Margin on the position** in the MEXC app once it's open, so leftover available balance gets pulled in automatically if liquidation becomes imminent — this app relies entirely on that MEXC-side feature rather than doing it itself.
+4. That's it — the key never touches the browser. `Execute plan on MEXC` calls `/api/execute`, which reads the key server-side and signs each request.
 
 ### What it does per click
 - Converts each buy's base-asset quantity into MEXC's contract count (`vol`) using the live contract spec (`contractSize`, `priceScale`, `volScale`).
 - Buy #1 is placed as a **market** order (fills immediately at the live price); every other buy is a **limit** order resting at its ladder price. This is a display/execution-layer choice only — `calc.js`'s sizing math is unaffected.
 - Places each order sequentially with ~550ms spacing to stay under MEXC's order-placement rate limit (4 requests / 2s).
 - Shows a per-order result (order ID or the specific MEXC error) once all orders have been submitted.
-- **Adds the remaining margin automatically.** After every order has been placed, `api/execute.js` sums up what was *actually* committed — using each order's real, exchange-rounded price × contract count, not the plan's theoretical numbers, since MEXC's `contractSize`/`volScale`/`minVol` rounding means the orders that land rarely cost exactly what the plan predicted — and subtracts that from the "Total capital" you entered. Whatever's left gets sent to MEXC's `position/change_margin` endpoint (`type: 1`, increase) and attached directly to the position. This needs the position's `positionId`, which only exists after Buy #1 has filled, so it polls `position/open_positions` (up to 6 tries, 500ms apart) before giving up — by the time every ladder order has been placed this has almost always already happened, so the poll is mostly a safety net. If the remainder is negative (orders somehow cost more than the provided capital) or under a $0.01 floor, the step is skipped and reported as such rather than attempted. No extra API key permission is needed — `change_margin` uses the same **Futures → Order Placing** permission as order creation.
+- **Reports leftover capital, informationally only.** After every order has been placed, `api/execute.js` sums up what was *actually* committed — using each order's real, exchange-rounded price × contract count, not the plan's theoretical numbers, since MEXC's `contractSize`/`volScale`/`minVol` rounding means the orders that land rarely cost exactly what the plan predicted — and subtracts that from the "Total capital" you entered. The difference (`leftoverCapital`) is just displayed as a note; nothing is done with it server-side. It stays in your futures wallet as available balance for MEXC's Auto-Margin feature to use.
 - Asks for a browser confirmation before sending anything — no orders go out on an accidental click.
 
 ## Pull available funds from MEXC
@@ -156,9 +159,9 @@ The page checks `api/status.js` for the current Asset on load, after fetching a 
 
   Scoping to "since the last Execute": `api/status.js` pulls every order for the symbol from `Get All Historical Orders` (unfiltered by state — its enum includes "unfilled", so one call covers resting/filled/canceled/invalid together), finds the most recent open-long **market** order (that's always Buy #1 in this app's ladder), and only returns orders from that timestamp onward. A prior, already-closed run on the same symbol won't show up mixed in.
 
-  **Unrealized P&L ($ and %):** computed from the position's own `holdAvgPrice` against a live ticker price, converted through the contract's `contractSize`. The % is P&L divided by the position's current `im` (initial margin) — MEXC's own live figure for margin actually committed to the position right now, which already reflects any margin you've added manually in the MEXC app.
+  **Unrealized P&L ($ and %):** computed from the position's own `holdAvgPrice` against a live ticker price, converted through the contract's `contractSize`. The % is P&L divided by the position's current `im` (initial margin) — MEXC's own live figure for margin actually committed to the position right now, which already reflects any top-up, whether added manually or by MEXC's own Auto-Margin feature.
 
-  **"Liq. if fully filled" price:** deliberately *not* MEXC's `liquidatePrice`, which only reflects what has actually filled so far. Instead, starting from the position's real, current `im`, avg entry, and size, this walks forward through every still-**resting** order in the scoped list, accumulates the margin each would add (`vol × contractSize × price ÷ leverage`, using the position's real leverage) and the resulting weighted avg entry, then reapplies the same isolated-margin liquidation formula used elsewhere in this app (`Avg Entry × (1 + MMR) − Total Margin ÷ Quantity`, MMR from the contract spec). Because it starts from live `im`, a manual margin top-up is picked up automatically on the next refresh.
+  **"Liq. if fully filled" price:** deliberately *not* MEXC's `liquidatePrice`, which only reflects what has actually filled so far. Instead, starting from the position's real, current `im`, avg entry, and size, this walks forward through every still-**resting** order in the scoped list, accumulates the margin each would add (`vol × contractSize × price ÷ leverage`, using the position's real leverage) and the resulting weighted avg entry, then reapplies the same isolated-margin liquidation formula used elsewhere in this app (`Avg Entry × (1 + MMR) − Total Margin ÷ Quantity`, MMR from the contract spec). Because it starts from live `im`, any margin top-up — including one made automatically by MEXC's Auto-Margin feature — is picked up automatically on the next refresh.
 
   **"Avg entry if filled" column (per order row):** a running cumulative average, computed client-side in `index.html` straight from the scoped orders list — since it's already sorted highest-price-first, which is exactly fill order for a DCA-down ladder, walking down it and accumulating `qty × price` (using each order's real `dealVol`/`dealAvgPrice` once filled, or its resting `vol`/`price` before that) reconstructs "what the position average would be if this row, and everything above it, has filled" at every rung. Canceled/invalid orders are skipped — they never will fill, so they don't contribute — and show as "—".
 
@@ -185,7 +188,7 @@ MEXC Spot v3 is a different API surface from Futures, not just a different symbo
 
 ### What each `api/spot/[action].js` action does
 - `price` / `balance` (GET `/api/spot/price`, `/api/spot/balance`) — live price and available USDT, same role as `api/price.js` / `api/balance.js`.
-- `execute` (POST `/api/spot/execute`) — places buy #1 as a market order (`quoteOrderQty`) and every other rung as a resting limit order, 550ms apart. After all orders are placed it reports `leftoverCapital` (planned capital minus what was actually committed) as an **informational line only** — unlike the Leveraged tab, this is not auto-deployed anywhere, since spot has no margin concept to add it to.
+- `execute` (POST `/api/spot/execute`) — places buy #1 as a market order (`quoteOrderQty`) and every other rung as a resting limit order, 550ms apart. After all orders are placed it reports `leftoverCapital` (planned capital minus what was actually committed) as an **informational line only** — same as the Leveraged tab's `api/execute.js`, and for Spot doubly so since there's no margin concept to add it to at all.
 - `status` (GET `/api/spot/status`) — maps MEXC Spot orders into the exact same shape/encoding the Futures integration uses (`state`: resting/filled/canceled, `orderType`: limit/market), so the existing Position Status card — including the cumulative "avg entry if filled" column — renders Spot runs with zero extra UI code. Reconstructs "position" (avg entry, size) from filled orders directly, since spot has no unified position object the way Futures does. P&L % is computed against cost basis (price × filled qty) standing in for margin, since there's no leverage to divide by.
 - `close` (POST `/api/spot/close`) — the Spot tab's "Close Position": cancels every resting order on the symbol, then market-sells the **entire free balance** of the base asset back to USDT. Like the Futures panic button, this flattens the whole symbol, not just the current run.
 
@@ -269,9 +272,9 @@ This serves `index.html` and runs `api/price.js` locally so the "Get price" butt
 
 Three test files, all wired into `npm test`:
 
-- `test/backfill.test.js` checks `calc.js`'s `computePlan` (the leveraged ladder-sizing engine) against the proven reference plan (the 12-buy, $951, $0.223-entry plan).
+- `test/backfill.test.js` checks `calc.js`'s `computePlan` (the leveraged ladder-sizing engine): an exactly hand-derived single-buy fixture, structural invariants (capital conservation, the sweet-spot peak landing where the ladder's own spacing says it should, the hump shape, and the auto-margin-needed flags) checked independently across a spread of inputs, and the input-validation error paths. There's no external spreadsheet backfill for the current sweet-spot-peaked shape — see the file's header comment for why.
 - `test/status-backfill.test.js` checks `statusCalc.js` — the P&L and projected-liquidation math shown on the Position Status card — against hand-computed, independently cross-checked fixtures (a loss scenario with resting orders, a zero-resting-orders case, a profitable long, and a profitable short).
-- `test/spot-backfill.test.js` checks `calc.js`'s `computeSpotPlan` against the same reference plan's trigger prices (confirming the shared `buildLadderShape` keeps Spot and Leveraged in sync), a second hand-computed fixture, and both error paths.
+- `test/spot-backfill.test.js` checks `calc.js`'s `computeSpotPlan`: trigger prices and shape cross-checked against the leveraged engine's own output (confirming the shared `buildLadderShape` keeps Spot and Leveraged in sync), two hand-computed fixtures (one where the sweet spot falls outside the ladder's range and degenerates to plain geometric growth, one with an interior peak), and both error paths.
 
 Run all three any time you change `calc.js` or `statusCalc.js`:
 
@@ -284,7 +287,8 @@ It's also wired into `vercel.json` as the build step — `vercel` / `vercel --pr
 ## Notes
 - Fees and funding are ignored.
 - Liquidation price formula: `Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity` (MEXC isolated margin).
-- Buy sizes grow geometrically (×1.26 per step); the ladder is spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target.
+- Buy sizes peak at the rung nearest a **-35% drawdown "sweet spot"** — the price this plan wants to buy the most at — growing geometrically (×1.26 per step) into it and shrinking geometrically (÷1.26 per step) beyond it, instead of growing monotonically all the way out. The ladder itself is still spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target. If the requested drawdown coverage is shallower than 35%, the sweet spot falls outside the ladder's own range and every buy just grows (no taper) — the same shape this calculator used before the sweet-spot change.
+- Every rung's displayed liquidation price is the real, immediate one — computed from committed buy margin only, ignoring the leftover "margin buffer" reserve, since this app never injects that reserve into the position itself (see "Execute plan on MEXC" above). Rows flagged "Needs auto-margin" are ones where surviving to the next buy is intentionally relying on MEXC's own Auto-Margin feature drawing from that reserve first, rather than this rung's own buy alone carrying the position that far — buys are sized leaner than that on purpose, per the sweet-spot shape above. The "Target liquidation" summary figure is what the plan guarantees *if* the reserve gets fully drawn in by the time it's needed, which is the one thing "Drawdown coverage" actually controls.
 - Default drawdown coverage is 70%.
 - On page load and on Reset, the app automatically pulls the live MEXC price and your live usable balance (same as clicking "Get price" / "Get balance") before calculating, so the plan always starts from real numbers rather than the static fallback defaults (0.223 / $951) baked into the input fields.
 - The auto-pulled usable balance always overwrites the Available balance field, even if it comes back as $0.00 (common while a position is already open and margin is tied up) — you'll need to top up or close the position before calculating a new plan, since a $0 capital fails the calculator's validation ("Entry price, leverage and capital must be positive").

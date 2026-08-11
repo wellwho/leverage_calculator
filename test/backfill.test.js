@@ -1,95 +1,150 @@
-// Backfill validation for calc.js
+// Validation for calc.js's computePlan (the leveraged ladder-sizing engine).
 //
-// "Backfill" fixtures below are taken verbatim from the proven reference
-// spreadsheet ("CRV Leverage Calculator (manual price).xlsx", ENGINE +
-// per-row table), which was built independently of calc.js and uses the
-// same K1/K2/E1 formulas. If calc.js ever drifts from this known-good
-// output, this test fails.
+// The previous version of this test pinned computePlan's output against a
+// hand-built reference spreadsheet. That spreadsheet was built for the old
+// ladder shape — buy sizes growing monotonically (×1.26/step) all the way
+// out, with a lump "Add Margin" step injected right after buy #1. Neither of
+// those is true anymore: buy sizes now peak at the buy nearest a -35%
+// drawdown "sweet spot" and taper off on both sides, and there's no injected
+// margin step at all — the leftover capital just sits as an untouched
+// reserve for MEXC's own Auto-Margin feature to draw on. There's no external
+// backfill source for this shape, so this suite instead checks:
+//
+//   1. An exactly hand-derived single-buy fixture (small enough to verify
+//      with a calculator, not spreadsheet software).
+//   2. Structural invariants that must hold for *any* valid input, re-derived
+//      independently of computePlan's own internals (capital conservation,
+//      the sweet-spot peak landing where the ladder's own spacing says it
+//      should, the hump actually being a hump, and the auto-margin-needed
+//      flag matching its own definition) across a spread of parameter combos.
+//   3. The pre-existing input-validation error paths.
 //
 // Run manually:   npm test        (or: node test/backfill.test.js)
 // Run on deploy:  wired into vercel.json's buildCommand — see README.
 
-const assert = require('assert');
 const { computePlan } = require('../calc.js');
 
-// Pass/absolute-floor tolerance: catches real regressions, ignores
-// last-bit float noise. 1e-6 relative, with a 1e-6 floor for near-zero values.
 function closeEnough(actual, expected) {
-  if (actual === null && expected === null) return true;
-  if (typeof actual !== 'number' || typeof expected !== 'number') return false;
+  if (typeof actual !== 'number' || typeof expected !== 'number') return actual === expected;
   return Math.abs(actual - expected) <= 1e-6 * Math.max(1, Math.abs(expected));
 }
 
-const fixtures = [
-  {
-    label: '12-buy plan — $951 capital, $0.223 entry, 5x, 1% MMR, 95% drawdown',
-    input: { entry: 0.223, leverage: 5, mmr: 0.01, capital: 951, numBuys: 12, targetDrawdownPct: 95 },
-    expectedRows: [
-      { step: 1, action: 'Limit Buy #1', price: 0.223, drawdown: 0, amount: 4.04851959336957, newQty: 90.773981914116, cumQty: 90.773981914116, avgEntry: 0.223, liq: null },
-      { step: 2, action: 'Add Margin', price: 0.223, drawdown: 0, amount: 717.244156051012, newQty: 0, cumQty: 90.773981914116, avgEntry: 0.223, liq: -7.72079881172293 },
-      { step: 3, action: 'Limit Buy #2', price: 0.205345833333333, drawdown: 0.0791666666666667, amount: 5.10113468764566, newQty: 124.208380682483, cumQty: 214.982362596599, avgEntry: 0.212800114635078, liq: -3.16392492852649 },
-      { step: 4, action: 'Limit Buy #3', price: 0.187691666666667, drawdown: 0.158333333333333, amount: 6.42742970643354, newQty: 171.223097449723, cumQty: 386.205460046322, avgEntry: 0.201668355304718, liq: -1.69380558685883 },
-      { step: 5, action: 'Limit Buy #4', price: 0.1700375, drawdown: 0.2375, amount: 8.09856143010626, newQty: 238.140452256304, cumQty: 624.345912302626, avgEntry: 0.189603591142591, liq: -0.995213998948608 },
-      { step: 6, action: 'Limit Buy #5', price: 0.152383333333333, drawdown: 0.316666666666667, amount: 10.2041874019339, newQty: 334.81966756865, cumQty: 959.165579871276, avgEntry: 0.176610970673258, liq: -0.604724403486126 },
-      { step: 7, action: 'Limit Buy #6', price: 0.134729166666667, drawdown: 0.395833333333333, amount: 12.8572761264367, newQty: 477.152662802661, cumQty: 1436.31824267394, avgEntry: 0.162697609615112, liq: -0.367577914931396 },
-      { step: 8, action: 'Limit Buy #7', price: 0.117075, drawdown: 0.475, amount: 16.2001679193102, newQty: 691.871361063858, cumQty: 2128.18960373779, avgEntry: 0.147865765237029, liq: -0.217249526985177 },
-      { step: 9, action: 'Limit Buy #8', price: 0.0994208333333333, drawdown: 0.554166666666667, amount: 20.4122115783309, newQty: 1026.55604936914, cumQty: 3154.74565310693, avgEntry: 0.132101756541736, liq: -0.120351612967797 },
-      { step: 10, action: 'Limit Buy #9', price: 0.0817666666666667, drawdown: 0.633333333333333, amount: 25.7193865886969, newQty: 1572.73052927213, cumQty: 4727.47618237907, avgEntry: 0.115356345356959, liq: -0.0582795558436199 },
-      { step: 11, action: 'Limit Buy #10', price: 0.0641125, drawdown: 0.7125, amount: 32.4064271017581, newQty: 2527.30958095209, cumQty: 7254.78576333115, avgEntry: 0.0975048104446444, liq: -0.019886070673158 },
-      { step: 12, action: 'Limit Buy #11', price: 0.0464583333333333, drawdown: 0.791666666666667, amount: 40.8320981482152, newQty: 4394.48589935949, cumQty: 11649.2716626906, avgEntry: 0.0782484113861456, liq: 0.00181134200515114 },
-      { step: 13, action: 'Limit Buy #12', price: 0.0288041666666667, drawdown: 0.870833333333333, amount: 51.4484436667512, newQty: 8930.72940837573, cumQty: 20580.0010710664, avgEntry: 0.0567919902292007, liq: 0.01115 },
-    ],
-    expectedSummary: {
-      totalBuys: 233.755843948988,
-      margin: 717.244156051012,
-      totalDeployed: 951,
-      finalQty: 20580.0010710664,
-      finalAvgEntry: 0.0567919902292007,
-      finalLiq: 0.01115,
-      drawdownCovered: 0.95,
-    },
-  },
-];
-
 let failures = 0;
 
-for (const fixture of fixtures) {
-  console.log(`\n${fixture.label}`);
-  const result = computePlan(fixture.input);
-
-  if (result.rows.length !== fixture.expectedRows.length) {
-    console.log(`  FAIL: expected ${fixture.expectedRows.length} rows, got ${result.rows.length}`);
+function check(label, actual, expected) {
+  const ok = typeof expected === 'boolean' ? actual === expected : closeEnough(actual, expected);
+  if (ok) {
+    console.log(`  PASS ${label}: ${actual}`);
+  } else {
+    console.log(`  FAIL ${label}: expected ${expected}, got ${actual}`);
     failures++;
-    continue;
   }
+}
 
-  fixture.expectedRows.forEach((expectedRow, i) => {
-    const actualRow = result.rows[i];
-    for (const key of ['step', 'action', 'price', 'drawdown', 'amount', 'newQty', 'cumQty', 'avgEntry', 'liq']) {
-      const actual = actualRow[key];
-      const expected = expectedRow[key];
-      const ok = typeof expected === 'number' ? closeEnough(actual, expected) : actual === expected;
-      if (!ok) {
-        console.log(`  FAIL row ${i + 1} [${key}]: expected ${expected}, got ${actual}`);
-        failures++;
-      }
-    }
-  });
+console.log('\nFixture A — single-buy plan, hand-derived exactly (entry 100, 5x, 1% MMR, $1000 capital, 50% target)');
+{
+  // Hand check: N=1 so weights=[1], K1=1, K2=1/100=0.01.
+  // targetLiq = 100*(1-0.5) = 50.
+  // denom = 5*(1*1.01 - 0.01*50) = 5*(1.01-0.5) = 5*0.51 = 2.55
+  // E1 = 1000/2.55 = 392.156862745098... (== totalBuys, the only buy)
+  // margin = 1000 - 392.156862745098... = 607.843137254902...
+  // qty = 392.156862745098*5/100 = 19.6078431372549...
+  // liq = 100*1.01 - 392.156862745098/19.6078431372549 = 101 - 20 = 81
+  const r = computePlan({ entry: 100, leverage: 5, mmr: 0.01, capital: 1000, numBuys: 1, targetDrawdownPct: 50 });
+  check('rows.length', r.rows.length, 1);
+  check('rows[0].amount (== totalBuys, E1)', r.rows[0].amount, 392.15686274509807);
+  check('rows[0].newQty', r.rows[0].newQty, 19.607843137254903);
+  check('rows[0].liq (naive)', r.rows[0].liq, 81);
+  check('margin', r.margin, 607.8431372549019);
+  check('totalBuys', r.totalBuys, 392.15686274509807);
+  check('totalDeployed == capital', r.totalDeployed, 1000);
+  check('naiveFinalLiq', r.naiveFinalLiq, 81);
+  check('protectedFinalLiq (== target liq exactly)', r.protectedFinalLiq, 50);
+  check('drawdownCovered', r.drawdownCovered, 0.5);
+  check('peakIdx', r.peakIdx, 0);
+  check('rows[0].autoMarginNeeded (margin>0 and naive liq worse than target)', r.rows[0].autoMarginNeeded, true);
+}
 
-  for (const key of Object.keys(fixture.expectedSummary)) {
-    const actual = result[key];
-    const expected = fixture.expectedSummary[key];
-    if (!closeEnough(actual, expected)) {
-      console.log(`  FAIL summary [${key}]: expected ${expected}, got ${actual}`);
-      failures++;
+console.log('\nFixture B — structural invariants across a spread of inputs');
+{
+  const combos = [
+    { label: 'old reference inputs (12 buys, deep 95% target — sweet spot well inside range)', input: { entry: 0.223, leverage: 5, mmr: 0.01, capital: 951, numBuys: 12, targetDrawdownPct: 95 } },
+    { label: 'shallow target (sweet spot beyond range — should degenerate to pure growth)', input: { entry: 100, leverage: 10, mmr: 0.005, capital: 500, numBuys: 6, targetDrawdownPct: 20 } },
+    { label: 'sweet spot exactly on a rung', input: { entry: 100, leverage: 10, mmr: 0.01, capital: 2000, numBuys: 20, targetDrawdownPct: 70 } },
+    { label: 'small N, deep target', input: { entry: 50, leverage: 8, mmr: 0.02, capital: 300, numBuys: 4, targetDrawdownPct: 90 } },
+  ];
+
+  for (const { label, input } of combos) {
+    const r = computePlan(input);
+    const N = r.rows.length;
+    const T = input.targetDrawdownPct / 100;
+    const spacing = T / N;
+
+    check(`${label}: rows.length == numBuys`, N, input.numBuys);
+    check(`${label}: totalBuys + margin == capital`, r.totalBuys + r.margin, input.capital);
+    check(`${label}: margin >= 0`, r.margin >= -1e-9, true);
+    check(`${label}: protectedFinalLiq == entry*(1-T)`, r.protectedFinalLiq, input.entry * (1 - T));
+    check(`${label}: drawdownCovered == T`, r.drawdownCovered, T);
+    check(`${label}: naiveFinalLiq worse than (>=) protectedFinalLiq`, r.naiveFinalLiq >= r.protectedFinalLiq - 1e-9, true);
+
+    // Peak = the rung whose drawdown lands closest to -35%, clamped to the
+    // ladder's own range — computed here independently of calc.js's formula.
+    const expectedPeak = Math.min(N - 1, Math.max(0, Math.round(0.35 / spacing)));
+    check(`${label}: peakIdx`, r.peakIdx, expectedPeak);
+
+    // Hump shape: strictly increasing $ amounts up to the peak, strictly
+    // decreasing after it.
+    let humpOk = true;
+    for (let i = 1; i <= r.peakIdx; i++) if (!(r.rows[i].amount > r.rows[i - 1].amount)) humpOk = false;
+    for (let i = r.peakIdx + 1; i < N; i++) if (!(r.rows[i].amount < r.rows[i - 1].amount)) humpOk = false;
+    check(`${label}: buy amounts form a hump peaking at peakIdx`, humpOk, true);
+
+    // autoMarginNeeded matches its own definition: does this rung's own
+    // naive liq price sit worse than the next buy's trigger price?
+    let flagsOk = true;
+    for (let i = 0; i < N - 1; i++) {
+      if (r.rows[i].autoMarginNeeded !== r.rows[i].liq > r.rows[i + 1].price) flagsOk = false;
     }
+    const expectedLastFlag = r.margin > 1e-9 && r.rows[N - 1].liq > r.protectedFinalLiq;
+    if (r.rows[N - 1].autoMarginNeeded !== expectedLastFlag) flagsOk = false;
+    check(`${label}: autoMarginNeeded flags match their definition`, flagsOk, true);
   }
+}
 
-  if (failures === 0) console.log('  PASS — matches reference spreadsheet exactly.');
+console.log('\nFixture C — error paths');
+{
+  try {
+    computePlan({ entry: 0, leverage: 5, mmr: 0.01, capital: 1000, numBuys: 5, targetDrawdownPct: 50 });
+    console.log('  FAIL: expected an error for entry <= 0');
+    failures++;
+  } catch (e) {
+    check('entry<=0 message', e.message, 'Entry price, leverage and capital must be positive.');
+  }
+  try {
+    computePlan({ entry: 100, leverage: 5, mmr: 0.01, capital: 1000, numBuys: 0, targetDrawdownPct: 50 });
+    console.log('  FAIL: expected an error for numBuys < 1');
+    failures++;
+  } catch (e) {
+    check('numBuys<1 message', e.message, 'Number of buys must be at least 1.');
+  }
+  try {
+    computePlan({ entry: 100, leverage: 5, mmr: 0.01, capital: 1000, numBuys: 5, targetDrawdownPct: 150 });
+    console.log('  FAIL: expected an error for targetDrawdownPct >= 100');
+    failures++;
+  } catch (e) {
+    check('target>=100% message', e.message, 'Target drawdown coverage must be between 0% and 100% (exclusive).');
+  }
+  try {
+    computePlan({ entry: 100, leverage: 1, mmr: 0.01, capital: 1000, numBuys: 5, targetDrawdownPct: 10 });
+    console.log('  FAIL: expected an error for an infeasible (negative-margin) combination');
+    failures++;
+  } catch (e) {
+    check('negative-margin message', e.message, 'Computed margin is negative — this target/leverage/N combination is infeasible on this budget.');
+  }
 }
 
 if (failures > 0) {
-  console.log(`\n${failures} mismatch(es) against the backfilled reference plan. Deploy blocked.`);
+  console.log(`\n${failures} mismatch(es). Deploy blocked.`);
   process.exit(1);
 } else {
   console.log('\nAll backfill fixtures match. Safe to deploy.');

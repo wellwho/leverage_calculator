@@ -1,5 +1,4 @@
-// Vercel serverless function: places the ladder's limit buy orders on MEXC Futures,
-// then adds whatever capital is left over as position margin.
+// Vercel serverless function: places the ladder's limit buy orders on MEXC Futures.
 // Credentials (MEXC_API_KEY / MEXC_API_SECRET) come from Vercel environment variables
 // only — they are never sent to or read from the browser.
 //
@@ -10,9 +9,14 @@
 //              this function converts it to MEXC's `vol` (number of contracts) itself.
 //   - capital: the plan's total capital. After every order is placed, whatever of it
 //              wasn't actually committed to an order (MEXC's vol/price rounding means
-//              this rarely matches the plan's numbers exactly) gets added directly to
-//              the position as margin — see addRemainingMargin() below. Optional: if
-//              omitted (e.g. an older frontend), the margin step is skipped.
+//              this rarely matches the plan's numbers exactly) is reported back as
+//              `leftoverCapital` — informational only. It's intentionally never pushed
+//              to the position as margin: this app assumes MEXC's own Auto-Margin
+//              feature (enabled per-position in the MEXC app) will draw on the
+//              account's available balance and top up margin before liquidation, so
+//              there's nothing for this app to do with it beyond leaving it as
+//              available balance. Optional: if omitted (e.g. an older frontend),
+//              leftoverCapital comes back null.
 //
 // Auth per MEXC's futures integration guide:
 //   target = accessKey + requestTimeMs + JSON.stringify(body)   [POST]
@@ -25,7 +29,6 @@ const crypto = require('crypto');
 const PRIVATE_BASE_URL = 'https://api.mexc.com';
 const CONTRACT_DETAIL_URL = 'https://contract.mexc.com/api/v1/contract/detail';
 const ORDER_SPACING_MS = 550; // keeps us under MEXC's 4 requests / 2s limit on order/create
-const MIN_MARGIN_ADD = 0.01; // defensive floor — skip attempting a dust/negative top-up rather than let MEXC reject it
 
 function sign(secretKey, accessKey, timestamp, paramString) {
   return crypto.createHmac('sha256', secretKey).update(accessKey + timestamp + paramString).digest('hex');
@@ -69,55 +72,6 @@ async function mexcPrivateGet(path, params, apiKey, secretKey) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Buy #1 (market) is placed first in the loop above, so by the time every
-// ladder order has been placed, several hundred ms to several seconds have
-// already elapsed — the position should already exist. Poll anyway, as a
-// safety net against any lag, before giving up.
-async function findOpenPosition(symbol, apiKey, secretKey, { attempts = 6, delayMs = 500 } = {}) {
-  for (let i = 0; i < attempts; i++) {
-    const data = await mexcPrivateGet('/api/v1/private/position/open_positions', { symbol }, apiKey, secretKey);
-    if (data && data.success === true && Array.isArray(data.data)) {
-      const position = data.data.find((p) => p.symbol === symbol && Number(p.holdVol) > 0);
-      if (position) return position;
-    }
-    if (i < attempts - 1) await sleep(delayMs);
-  }
-  return null;
-}
-
-// Adds `amount` directly to the open position's margin via MEXC's
-// change_margin endpoint (type 1 = increase). Requires the position to
-// already exist, which is why this only ever runs after every ladder
-// order has been placed.
-async function addRemainingMargin({ symbol, amount, apiKey, secretKey }) {
-  const position = await findOpenPosition(symbol, apiKey, secretKey);
-  if (!position) {
-    return {
-      attempted: true,
-      success: false,
-      amount,
-      error: 'Could not find the open position after placing orders — margin was not added automatically. Add it manually in the MEXC app.',
-    };
-  }
-  try {
-    const data = await mexcPrivatePost(
-      '/api/v1/private/position/change_margin',
-      { positionId: position.positionId, amount: Number(amount.toFixed(6)), type: 1 },
-      apiKey,
-      secretKey
-    );
-    return {
-      attempted: true,
-      success: !!data.success,
-      amount,
-      positionId: position.positionId,
-      error: data.success ? null : data.message || `MEXC error code ${data.code}`,
-    };
-  } catch (err) {
-    return { attempted: true, success: false, amount, positionId: position.positionId, error: String(err.message || err) };
-  }
-}
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -201,35 +155,19 @@ module.exports = async (req, res) => {
 
   // Whatever capital wasn't actually committed to a successfully-placed
   // order — using each order's real, exchange-rounded price × vol, not the
-  // plan's theoretical numbers — gets added straight to the position as
-  // margin. This intentionally does NOT use calc.js's precomputed "Add
-  // Margin" figure: MEXC's contract-unit rounding (contractSize/volScale/
-  // minVol) means the orders that actually landed rarely cost exactly what
-  // the plan predicted, so "whatever capital is left after placing every
-  // order" is the more accurate number.
-  let marginAdd = null;
+  // plan's theoretical numbers — is reported back as informational only.
+  // It intentionally stays as available futures balance rather than being
+  // pushed into the position: this app assumes MEXC's own Auto-Margin
+  // feature will draw on that available balance and top up the position
+  // before liquidation, so there's nothing for this app to actively do here.
   const capitalNum = Number(capital);
+  let leftoverCapital = null;
   if (Number.isFinite(capitalNum) && capitalNum > 0) {
     const committedMargin = results
       .filter((r) => r.success)
       .reduce((sum, r) => sum + (r.price * r.vol * contractSize) / Number(leverage), 0);
-    const remaining = capitalNum - committedMargin;
-
-    if (remaining >= MIN_MARGIN_ADD) {
-      marginAdd = await addRemainingMargin({ symbol, amount: remaining, apiKey, secretKey });
-    } else {
-      marginAdd = {
-        attempted: false,
-        amount: remaining,
-        reason:
-          remaining < 0
-            ? 'Placed orders committed more than the provided capital — nothing left to add.'
-            : 'Remaining amount is below the minimum to bother adding.',
-      };
-    }
-  } else {
-    marginAdd = { attempted: false, amount: null, reason: 'No capital value was provided — margin step skipped.' };
+    leftoverCapital = capitalNum - committedMargin;
   }
 
-  res.status(200).json({ contractSize, results, marginAdd });
+  res.status(200).json({ contractSize, results, leftoverCapital });
 };
