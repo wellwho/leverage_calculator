@@ -41,12 +41,21 @@ function sign(secretKey, totalParams) {
   return crypto.createHmac('sha256', secretKey).update(totalParams).digest('hex');
 }
 
+// Since Feb 2024, MEXC's API gateway rejects every request — GET, POST, and
+// DELETE alike — unless the Content-Type header is exactly
+// "application/json" (error code 700013, msg "Invalid content Type."), even
+// though the actual params are still sent as a signed query string, not a
+// JSON body. This tripped up ccxt too (ccxt/ccxt#21345): the fix isn't to
+// send a real JSON body, it's to send the query string as before and just
+// set this header so the gateway's check passes.
+const JSON_CONTENT_TYPE_HEADER = { 'Content-Type': 'application/json' };
+
 async function spotPrivateGet(path, params, apiKey, secretKey) {
   const allParams = { ...params, timestamp: Date.now(), recvWindow: RECV_WINDOW };
   const paramString = buildParamString(allParams);
   const signature = sign(secretKey, paramString);
   const res = await fetch(`${BASE_URL}${path}?${paramString}&signature=${signature}`, {
-    headers: { 'X-MEXC-APIKEY': apiKey },
+    headers: { 'X-MEXC-APIKEY': apiKey, ...JSON_CONTENT_TYPE_HEADER },
   });
   let data;
   try {
@@ -63,7 +72,7 @@ async function spotPrivateDelete(path, params, apiKey, secretKey) {
   const signature = sign(secretKey, paramString);
   const res = await fetch(`${BASE_URL}${path}?${paramString}&signature=${signature}`, {
     method: 'DELETE',
-    headers: { 'X-MEXC-APIKEY': apiKey },
+    headers: { 'X-MEXC-APIKEY': apiKey, ...JSON_CONTENT_TYPE_HEADER },
   });
   return res.json();
 }
@@ -72,10 +81,13 @@ async function spotPrivatePost(path, params, apiKey, secretKey) {
   const allParams = { ...params, timestamp: Date.now(), recvWindow: RECV_WINDOW };
   const paramString = buildParamString(allParams);
   const signature = sign(secretKey, paramString);
-  const res = await fetch(`${BASE_URL}${path}`, {
+  // Params travel in the query string (not the body) — same as the GET/
+  // DELETE helpers above — because the Content-Type header below is a
+  // gateway-level requirement, not a real declaration of the body's
+  // encoding. Sending an empty body keeps the two in sync.
+  const res = await fetch(`${BASE_URL}${path}?${paramString}&signature=${signature}`, {
     method: 'POST',
-    headers: { 'X-MEXC-APIKEY': apiKey, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `${paramString}&signature=${signature}`,
+    headers: { 'X-MEXC-APIKEY': apiKey, ...JSON_CONTENT_TYPE_HEADER },
   });
   let data;
   try {
