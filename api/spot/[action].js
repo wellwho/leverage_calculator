@@ -334,15 +334,32 @@ async function handleExecute(req, res, apiKey, secretKey) {
 // Futures integration's history_orders endpoint doesn't have this limit.
 
 // Classifies a raw MEXC order into our simplified filled/resting/canceled
-// buckets from quantities rather than trusting the exact status-enum
-// spelling (MEXC's docs didn't confirm the full status enum — see the
-// execute handler's header comment for the same caveat).
+// buckets.
+//
+// Order #1 of every plan is a MARKET buy placed via `quoteOrderQty` (spend
+// exactly $X) rather than `quantity` (buy exactly Y units) — see the execute
+// handler above. MEXC's allOrders response for an order placed that way
+// comes back with `origQty` at "0.000000" even once fully filled (the fill
+// amount instead lives in `executedQty`/`cummulativeQuoteQty`); the actual
+// base-asset quantity was never known ahead of the fill, so there was never
+// an origQty to report. The old version of this function required
+// `origQty > 0` to ever call something "filled", which meant a fully-filled
+// market buy was permanently misclassified as "resting" — and since that
+// market buy is usually the only order that's actually filled early in a
+// ladder's life, `holdVol` below would come out to 0 and the whole Position
+// Status card would report "no position" despite a real, filled position
+// sitting in the account. `status` is checked first now (MEXC does return it
+// on every order — "FILLED" for a completed market or limit buy), with the
+// quantity comparison kept only as a fallback for any status string this
+// function doesn't recognize.
 function classify(o) {
   const executedQty = Number(o.executedQty || 0);
   const origQty = Number(o.origQty || 0);
   const status = String(o.status || '').toUpperCase();
-  if (status === 'CANCELED' || status === 'REJECTED' || status === 'EXPIRED') return 4; // canceled
-  if (origQty > 0 && executedQty >= origQty - 1e-9) return 3; // filled
+  if (status === 'CANCELED' || status === 'REJECTED' || status === 'EXPIRED' || status === 'PARTIALLY_CANCELED') return 4; // canceled
+  if (status === 'FILLED') return 3; // filled — trust MEXC's own status first
+  if (origQty > 0 && executedQty >= origQty - 1e-9) return 3; // filled (fallback: quantity-based, for limit orders / unrecognized status strings)
+  if (!(origQty > 0) && executedQty > 0) return 3; // filled market order with no origQty to compare against (quoteOrderQty case)
   return 2; // resting (covers NEW and PARTIALLY_FILLED alike)
 }
 
@@ -522,6 +539,11 @@ async function handleClose(req, res, apiKey, secretKey) {
 }
 
 // ---- dispatcher ----------------------------------------------------------
+// module.exports must stay a plain invocable function — that's what Vercel
+// calls as the serverless handler. `classify` is attached to it as a
+// property (functions are objects) purely so test/spot-status-classify.test.js
+// can exercise it directly without duplicating its logic or standing up a
+// fake MEXC server.
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -558,3 +580,5 @@ module.exports = async (req, res) => {
       res.status(404).json({ error: `Unknown spot action "${action}".` });
   }
 };
+
+module.exports.classify = classify;
