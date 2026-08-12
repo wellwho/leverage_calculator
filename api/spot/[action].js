@@ -184,6 +184,47 @@ async function getFreeUsdt(apiKey, secretKey) {
   }
 }
 
+// Free + locked balance of a single asset (public account snapshot) — shared
+// by handleStatus (real position size, see below) and anything else that
+// needs ground truth about what's actually held rather than what an order
+// history reconstruction implies.
+async function getAssetBalance(asset, apiKey, secretKey) {
+  try {
+    const data = await spotPrivateGet('/api/v3/account', {}, apiKey, secretKey);
+    if (!data || !Array.isArray(data.balances)) return null;
+    const entry = data.balances.find((b) => b.asset === asset);
+    return entry ? { free: Number(entry.free), locked: Number(entry.locked) } : { free: 0, locked: 0 };
+  } catch {
+    return null;
+  }
+}
+
+// Symbol precision (public endpoint, no auth) — shared by execute/close/
+// status so quantities/prices land on values MEXC will accept and dust
+// thresholds are computed consistently. MEXC's spot v3 docs don't document a
+// stepSize/tickSize filter the way Binance's do — precision comes from flat
+// baseAssetPrecision/quotePrecision fields instead.
+async function getSymbolPrecision(symbol) {
+  let baseAssetPrecision = 6;
+  let quotePrecision = 8;
+  try {
+    const detailRes = await fetch(`${BASE_URL}/api/v3/exchangeInfo?symbol=${encodeURIComponent(symbol)}`);
+    const detail = await detailRes.json();
+    const info = Array.isArray(detail?.symbols) ? detail.symbols.find((s) => s.symbol === symbol) : detail;
+    if (info) {
+      if (Number.isFinite(Number(info.baseAssetPrecision))) baseAssetPrecision = Number(info.baseAssetPrecision);
+      if (Number.isFinite(Number(info.quotePrecision))) quotePrecision = Number(info.quotePrecision);
+    }
+    // If exchangeInfo doesn't return anything useful, fall back to the
+    // defaults above rather than failing the whole caller — MEXC will still
+    // reject an individual order if the rounding is actually wrong, and that
+    // surfaces per-row rather than blocking everything.
+  } catch {
+    // keep defaults
+  }
+  return { baseAssetPrecision, quotePrecision };
+}
+
 // ---- execute: POST /api/spot/execute -----------------------------------
 // body: { symbol: "CRVUSDT", capital: 951, orders: [{ step, price, qty }, ...] }
 //   - price: trigger price (quote currency) — used as the LIMIT price for
@@ -217,27 +258,7 @@ async function handleExecute(req, res, apiKey, secretKey) {
     return;
   }
 
-  // Pull the symbol's precision (public endpoint, no auth) so quantities/
-  // prices land on values MEXC will accept. MEXC's spot v3 docs don't
-  // document a stepSize/tickSize filter the way Binance's do — precision
-  // comes from flat baseAssetPrecision/quotePrecision fields instead.
-  let baseAssetPrecision = 6;
-  let quotePrecision = 8;
-  try {
-    const detailRes = await fetch(`${BASE_URL}/api/v3/exchangeInfo?symbol=${encodeURIComponent(symbol)}`);
-    const detail = await detailRes.json();
-    const info = Array.isArray(detail?.symbols) ? detail.symbols.find((s) => s.symbol === symbol) : detail;
-    if (info) {
-      if (Number.isFinite(Number(info.baseAssetPrecision))) baseAssetPrecision = Number(info.baseAssetPrecision);
-      if (Number.isFinite(Number(info.quotePrecision))) quotePrecision = Number(info.quotePrecision);
-    }
-    // If exchangeInfo doesn't return anything useful, fall back to the
-    // defaults above rather than failing the whole execute — MEXC will
-    // still reject an individual order if the rounding is actually wrong,
-    // and that surfaces per-row below rather than blocking everything.
-  } catch {
-    // keep defaults
-  }
+  const { baseAssetPrecision, quotePrecision } = await getSymbolPrecision(symbol);
 
   const results = [];
   let committedTotal = 0;
@@ -321,24 +342,42 @@ async function handleExecute(req, res, apiKey, secretKey) {
 
 // ---- status: GET /api/spot/status?symbol=CRVUSDT -----------------------
 // Read-only Spot ladder status for one symbol — the Spot-mode counterpart
-// to api/status.js (Futures). No position/margin/liquidation concept here
-// at all: "holdings" are just whatever the scoped orders below have
-// actually filled, and P&L is plain return-on-cost-basis (statusCalc.js's
-// computePnl, reused with `im` set to the cost basis instead of a margin
-// figure — the math is identical: dollar P&L divided by whatever capital is
-// actually at risk).
+// to api/status.js (Futures). Unlike an earlier version of this handler,
+// `hasPosition` is NOT reconstructed from order history — it's read
+// directly from the account's real free+locked balance of the base asset
+// (e.g. CRV), the same way api/status.js trusts MEXC's actual
+// open_positions endpoint for Futures. Order history is still used, but
+// only for what a balance number alone can't provide: the fill/resting/
+// canceled table, and reconstructing an average cost basis for P&L.
+//
+// Why hasPosition can't be inferred from fills alone: the earlier version
+// scanned the scoped order list for anything "filled" and summed dealVol,
+// with every order's `side` hardcoded to 1 (buy) regardless of what MEXC
+// actually reported. That meant a SELL order — e.g. from the "Close
+// position" panic button, or a manual sell placed directly on MEXC — got
+// counted as ADDING to holdings instead of subtracting, so a fully
+// flattened account could still show as "in position" indefinitely
+// (reported live: position still showing after the account was already
+// flat). Worse, since the "since" scope anchored to the most recent MARKET
+// order of *either* side, closing via a market sell could push sinceTime
+// past the original buys entirely, leaving only the sell itself in scope —
+// misread as a brand-new buy fill. Reading the real balance sidesteps all
+// of that: if you don't actually hold the asset, there's no position, full
+// stop, regardless of what the order-history reconstruction would imply.
+//
+// Order-history caveat (unchanged from before): MEXC's allOrders endpoint
+// only looks back a maximum of 7 days. A position opened longer ago than
+// that with no order activity since will still correctly show as held (the
+// real balance says so), but its avg entry / P&L come back null — there
+// are no fills left in view to reconstruct a cost basis from.
 //
 // The orders returned are mapped into the exact same shape Futures orders
 // use ({price, vol, dealVol, dealAvgPrice, state, orderType, side,
-// createTime}, with the same state/orderType number encoding: state 2
-// resting, 3 filled, 4 canceled; orderType 1 limit, 5 market) so the
-// browser's existing renderPositionStatus() — including its cumulative
-// avg-entry-if-filled column — works for Spot mode with zero new UI code.
-//
-// Order-history caveat: MEXC's allOrders endpoint only looks back a maximum
-// of 7 days. A deployment left running longer than that without a fresh
-// Execute would lose visibility into its own early orders here — the
-// Futures integration's history_orders endpoint doesn't have this limit.
+// createTime}, with the same state/orderType/side number encoding: state 2
+// resting, 3 filled, 4 canceled; orderType 1 limit, 5 market; side 1 buy, 2
+// sell) so the browser's existing renderPositionStatus() — including its
+// cumulative avg-entry-if-filled column — works for Spot mode with zero new
+// UI code.
 
 // Classifies a raw MEXC order into our simplified filled/resting/canceled
 // buckets.
@@ -351,14 +390,10 @@ async function handleExecute(req, res, apiKey, secretKey) {
 // base-asset quantity was never known ahead of the fill, so there was never
 // an origQty to report. The old version of this function required
 // `origQty > 0` to ever call something "filled", which meant a fully-filled
-// market buy was permanently misclassified as "resting" — and since that
-// market buy is usually the only order that's actually filled early in a
-// ladder's life, `holdVol` below would come out to 0 and the whole Position
-// Status card would report "no position" despite a real, filled position
-// sitting in the account. `status` is checked first now (MEXC does return it
-// on every order — "FILLED" for a completed market or limit buy), with the
-// quantity comparison kept only as a fallback for any status string this
-// function doesn't recognize.
+// market buy was permanently misclassified as "resting". `status` is
+// checked first now (MEXC does return it on every order — "FILLED" for a
+// completed market or limit buy), with the quantity comparison kept only as
+// a fallback for any status string this function doesn't recognize.
 function classify(o) {
   const executedQty = Number(o.executedQty || 0);
   const origQty = Number(o.origQty || 0);
@@ -376,6 +411,22 @@ async function handleStatus(req, res, apiKey, secretKey) {
     res.status(400).json({ error: 'symbol query param is required.' });
     return;
   }
+  // This app only ever trades USDT-quoted pairs (see index.html's
+  // toSpotSymbol) — safe to derive the base asset by stripping the suffix.
+  const baseAsset = symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol;
+
+  const { baseAssetPrecision } = await getSymbolPrecision(symbol);
+
+  // Ground truth for whether a position exists at all — see header comment.
+  const balance = await getAssetBalance(baseAsset, apiKey, secretKey);
+  if (balance === null) {
+    res.status(502).json({ error: `Could not look up ${baseAsset} balance — check the key has "Spot Account Read" permission.` });
+    return;
+  }
+  const factor = Math.pow(10, baseAssetPrecision);
+  // Floor — never let float dust above the true balance read as "held".
+  const realHoldVol = Math.floor((balance.free + balance.locked) * factor) / factor;
+  const hasPosition = realHoldVol > 0;
 
   let orders = [];
   let sinceTime = null;
@@ -397,45 +448,53 @@ async function handleStatus(req, res, apiKey, secretKey) {
         vol: Number(o.origQty),
         dealVol: executedQty,
         dealAvgPrice,
-        side: 1,
+        side: String(o.side).toUpperCase() === 'SELL' ? 2 : 1, // 1 buy, 2 sell — read from MEXC, not assumed (see header comment)
         orderType: isMarket ? 5 : 1,
         state: classify(o),
         createTime: Number(o.time),
       };
     });
 
-    // Same "since the last Execute" scoping as the Futures integration:
-    // the most recent market buy marks the start of the current run.
-    const marketBuys = all.filter((o) => o.orderType === 5);
+    // Same "since the last Execute" scoping as the Futures integration: the
+    // most recent BUY-side market order marks the start of the current run.
+    // Scoped to BUY specifically (unlike the earlier version) so a market
+    // SELL — e.g. from Close Position — can't shift this boundary past the
+    // ladder's own buys.
+    const marketBuys = all.filter((o) => o.orderType === 5 && o.side === 1);
     if (marketBuys.length > 0) sinceTime = Math.max(...marketBuys.map((o) => o.createTime));
 
     const scoped = sinceTime !== null ? all.filter((o) => o.createTime >= sinceTime) : all;
-    orders = scoped.sort((a, b) => b.price - a.price);
+    // The fill/resting table and the avg-entry-if-filled column are both
+    // framed around "how did this run's buy ladder progress" — a sell isn't
+    // a ladder rung, so it's excluded here rather than risk being misread
+    // as one.
+    orders = scoped.filter((o) => o.side === 1).sort((a, b) => b.price - a.price);
   } catch (err) {
     res.status(502).json({ error: 'Failed to reach MEXC.', detail: String(err.message || err) });
     return;
   }
 
-  // "Holdings" for this run = whatever's actually filled in the scoped list
-  // — there's no unified position object on the spot side the way Futures
-  // has one, so this is reconstructed directly from fills.
+  // Cost basis for P&L, reconstructed from this run's filled BUY orders —
+  // only available within the 7-day order-history window (see header
+  // comment). hasPosition/realHoldVol above never depend on this; a
+  // position held longer than that still shows as open, just without an avg
+  // entry to compute P&L from.
   const filled = orders.filter((o) => o.state === 3);
-  const holdVol = filled.reduce((s, o) => s + o.dealVol, 0);
-  const holdNotional = filled.reduce((s, o) => s + o.dealVol * o.dealAvgPrice, 0);
-  const holdAvgPrice = holdVol > 0 ? holdNotional / holdVol : null;
-  const hasPosition = holdVol > 0;
+  const filledVol = filled.reduce((s, o) => s + o.dealVol, 0);
+  const filledNotional = filled.reduce((s, o) => s + o.dealVol * o.dealAvgPrice, 0);
+  const holdAvgPrice = filledVol > 0 ? filledNotional / filledVol : null;
 
   let pnl = null;
-  if (hasPosition) {
+  if (hasPosition && holdAvgPrice !== null) {
     try {
       const tickerRes = await fetch(`${BASE_URL}/api/v3/ticker/price?symbol=${encodeURIComponent(symbol)}`);
       const ticker = await tickerRes.json();
       const currentPrice = ticker && ticker.price ? Number(ticker.price) : null;
       if (currentPrice) {
-        const costBasis = holdAvgPrice * holdVol; // no leverage — cost basis IS the capital at risk
+        const costBasis = holdAvgPrice * realHoldVol; // no leverage — cost basis IS the capital at risk
         const { dollar, percent } = computePnl({
           holdAvgPrice,
-          holdVol,
+          holdVol: realHoldVol,
           contractSize: 1,
           currentPrice,
           im: costBasis,
@@ -450,7 +509,7 @@ async function handleStatus(req, res, apiKey, secretKey) {
 
   res.status(200).json({
     hasPosition,
-    position: hasPosition ? { holdAvgPrice, holdVol } : null,
+    position: hasPosition ? { holdAvgPrice, holdVol: realHoldVol } : null,
     orders,
     sinceTime,
     pnl,
