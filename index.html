@@ -375,7 +375,7 @@
           <tbody></tbody>
         </table>
       </div>
-      <div class="note">
+      <div class="note" id="ordersNote">
         Orders since your last Execute — not the pair's full trading history. "Filled" rows show how deep this run's ladder actually went; "Resting" ones are still on the book. "Avg entry if filled" is the running position average as if every order down to that row has triggered — a cumulative preview of where your average lands at each rung, same idea as the Ladder table's Avg entry column but built from these real orders. Canceled/invalid orders don't contribute and show "—". While a position is open, "Execute plan on Bybit" is hidden below so you don't accidentally deploy a second ladder on top of it — the Calculate button above still works for previewing numbers only.
       </div>
       <div class="feasibility-note bad" id="ordersErrorNote" style="display: none;"></div>
@@ -510,6 +510,12 @@ let mode = 'spot';
 // were actually using.
 const EXCHANGE_LABEL = { bybit: 'Bybit', mexc: 'MEXC' };
 
+// The Position Status orders note is authored Bybit-first in the HTML above
+// (it quotes the Execute button's own label). Captured once, before any
+// exchangeCopy() swap has run, so applyModeCopy() can re-render it from the
+// pristine text every time — re-swapping already-swapped text would be a
+// one-way trip back from MEXC.
+const ORDERS_NOTE_TEMPLATE = el('ordersNote').innerHTML;
 let exchange = 'bybit';
 try {
   const savedExchange = localStorage.getItem('lastExchange');
@@ -652,6 +658,11 @@ function applyModeCopy() {
   el('executeNote').innerHTML = exchangeCopy(copy.executeNote);
   el('dangerNote').textContent = exchangeCopy(copy.dangerNote);
   el('footerNote').textContent = exchangeCopy(copy.footer);
+  // The Execute button names the exchange it will actually place orders on.
+  // It's the last thing read before committing real funds, so it has to track
+  // setExchange() rather than sit on the HTML's Bybit-first default.
+  el('executeBtn').textContent = `Execute plan on ${EXCHANGE_LABEL[exchange]}`;
+  el('ordersNote').innerHTML = exchangeCopy(ORDERS_NOTE_TEMPLATE);
 }
 
 function setMode(newMode) {
