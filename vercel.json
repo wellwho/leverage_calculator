@@ -1,8 +1,11 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm test",
   "outputDirectory": ".",
+  "regions": ["sin1"],
   "functions": {
     "api/execute.js": { "maxDuration": 60 },
-    "api/spot/[action].js": { "maxDuration": 60 }
+    "api/spot/[action].js": { "maxDuration": 60 },
+    "api/status.js": { "maxDuration": 30 }
   }
 }

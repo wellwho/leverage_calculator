@@ -1,5 +1,5 @@
 // Tells index.html which mode this deployment is running in. Public and
-// tiny on purpose — no secrets, no MEXC calls — since it has to be reachable
+// tiny on purpose — no secrets, no Bybit calls — since it has to be reachable
 // even on a demo project where nothing else is configured.
 //
 // GET /api/config -> { demoMode: boolean }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Leveraged DCA Ladder Calculator — MEXC</title>
+<title>Leveraged DCA Ladder Calculator</title>
 <style>
   :root {
     --bg: #0b0f14;
@@ -55,6 +55,18 @@
     font-family: var(--mono);
   }
   input:focus { outline: none; border-color: var(--accent); }
+  input:disabled { opacity: 0.55; cursor: not-allowed; }
+  .capital-toggle-btn {
+    background: var(--panel2);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .capital-toggle-btn.active { background: var(--accent); color: #0b0f14; border-color: var(--accent); }
   .price-row { display: flex; gap: 8px; align-items: flex-end; }
   .price-row > div:first-child { flex: 1; }
   button {
@@ -113,6 +125,48 @@
   .price-status.ok { color: var(--green); }
   .price-status.err { color: var(--red); }
   .price-status.pending { color: var(--muted); }
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 10px;
+    border-radius: 5px;
+    outline: none;
+    padding: 0;
+    border: none;
+    cursor: pointer;
+    background: var(--panel2);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--text);
+    border: 2px solid var(--bg);
+    box-shadow: 0 0 3px rgba(0,0,0,0.7);
+    cursor: pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--text);
+    border: 2px solid var(--bg);
+    box-shadow: 0 0 3px rgba(0,0,0,0.7);
+    cursor: pointer;
+  }
+  input[type="range"]::-moz-range-track {
+    height: 10px;
+    border-radius: 5px;
+    background: transparent;
+  }
+  .feasibility-note { font-size: 12px; margin-top: 8px; line-height: 1.5; min-height: 16px; }
+  .feasibility-note.safe { color: var(--green); }
+  .feasibility-note.warn { color: var(--accent2); }
+  .feasibility-note.bad { color: var(--red); }
+  .feasibility-scale { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin-top: 3px; }
   .calc-btn-row { margin-top: 18px; display: flex; gap: 10px; }
   .calc-btn-row button { flex: 0 0 auto; padding: 11px 22px; font-size: 14px; }
   .error-box {
@@ -162,12 +216,17 @@
   <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;">
     <div>
       <h1 id="pageTitle">Spot DCA Ladder Calculator</h1>
-      <div class="subtitle" id="pageSubtitle">Plain dollar-cost-averaging buys — no leverage, no margin, no liquidation. Live prices from MEXC Spot.</div>
+      <div class="subtitle" id="pageSubtitle">Plain dollar-cost-averaging buys — no leverage, no margin, no liquidation. Live prices from Bybit Spot.</div>
     </div>
     <button id="logoutBtn" class="secondary" style="flex: 0 0 auto; margin-top: 2px;">Log out</button>
   </div>
 
-  <div id="demoBanner" class="demo-banner">DEMO MODE — all balances, positions and orders on this page are simulated. No real MEXC account is connected and no real trades are ever placed.</div>
+  <div id="demoBanner" class="demo-banner">DEMO MODE — all balances, positions and orders on this page are simulated. No real exchange account is connected and no real trades are ever placed.</div>
+
+  <div class="tabs">
+    <button id="exchangeBybitBtn" class="tab-btn active">Bybit</button>
+    <button id="exchangeMexcBtn" class="tab-btn">MEXC</button>
+  </div>
 
   <div class="tabs">
     <button id="tabSpot" class="tab-btn active">Spot DCA</button>
@@ -176,6 +235,14 @@
 
   <div class="card">
     <h2>Inputs</h2>
+    <div id="capitalModeRow" style="margin-bottom: 18px;">
+      <label>Capital to deploy</label>
+      <div class="price-row">
+        <button id="capitalModeAllBtn" type="button" class="capital-toggle-btn">All Funds</button>
+        <button id="capitalModeCustomBtn" type="button" class="capital-toggle-btn active">Custom Amount</button>
+      </div>
+      <div id="capitalModeNote" class="price-status"></div>
+    </div>
     <div class="grid">
       <div>
         <label for="symbol">Asset (vs USDT)</label>
@@ -215,10 +282,17 @@
         <label for="mmr">Maintenance margin rate (%)</label>
         <input id="mmr" type="number" step="any" value="1" />
       </div>
-      <div id="spotPeakField">
-        <label for="spotPeak">Peak buy drawdown (%)</label>
-        <input id="spotPeak" type="number" step="any" min="1" max="99" value="35" />
+    </div>
+    <div style="margin-top: 14px;">
+      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+        <label for="peakSlider" style="margin-bottom: 0;">Peak buy weight — % of target drawdown</label>
+        <input id="peakDrawdown" type="number" step="any" min="1" max="100" value="50" style="width: 68px; padding: 6px 8px; font-size: 13px; text-align: right;" />
       </div>
+      <input id="peakSlider" type="range" min="1" max="100" step="1" value="50" />
+      <div class="feasibility-scale"><span>Shallow (1%)</span><span>Deep (100%)</span></div>
+      <div class="feasibility-note" id="peakPositionNote"></div>
+      <div class="feasibility-note" id="peakLiqNote"></div>
+      <div class="feasibility-note" id="feasibilityNote"></div>
     </div>
     <div class="calc-btn-row">
       <button id="calcBtn">Calculate plan</button>
@@ -234,12 +308,10 @@
       <h2>Summary</h2>
       <div class="summary-grid">
         <div class="stat"><div class="label">Total buys ($)</div><div class="value" id="sumBuys">—</div></div>
-        <div class="stat" id="sumMarginStat" style="display: none;"><div class="label">Margin buffer ($)</div><div class="value" id="sumMargin">—</div></div>
         <div class="stat"><div class="label">Total deployed ($)</div><div class="value" id="sumDeployed">—</div></div>
         <div class="stat"><div class="label">Final qty</div><div class="value" id="sumQty">—</div></div>
         <div class="stat"><div class="label">Final avg entry ($)</div><div class="value" id="sumAvg">—</div></div>
-        <div class="stat" id="sumNaiveLiqStat" style="display: none;"><div class="label">Liq. if reserve untouched ($)</div><div class="value liq" id="sumNaiveLiq">—</div></div>
-        <div class="stat" id="sumLiqStat" style="display: none;"><div class="label">Target liquidation ($)</div><div class="value liq" id="sumLiq">—</div></div>
+        <div class="stat" id="sumLiqStat" style="display: none;"><div class="label">Final liquidation ($)</div><div class="value liq" id="sumLiq">—</div></div>
         <div class="stat"><div class="label" id="sumCoveredLabel">Ladder depth</div><div class="value cov" id="sumCovered">—</div></div>
       </div>
     </div>
@@ -259,20 +331,19 @@
               <th>Cumulative qty</th>
               <th>Avg entry ($)</th>
               <th id="liqColHeader" style="display: none;">Liquidation ($)</th>
-              <th id="autoMarginColHeader" style="display: none;">Needs auto-margin?</th>
             </tr>
           </thead>
           <tbody></tbody>
         </table>
       </div>
       <div class="note" id="ladderNote">
-        Fees are ignored. There's no leverage or liquidation here — every dollar of "Available balance" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) up to the buy nearest the "Peak buy drawdown" set above (default -35%), then shrink geometrically beyond it, spaced evenly across the ladder down to the requested depth. If the peak drawdown falls beyond the ladder's own reach, it clamps to the last buy and sizing grows the whole way instead. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, and the same buy-size shape when the peak is left at its default.
+        Fees are ignored. There's no leverage or liquidation here — every dollar of "Available balance" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) up to the buy nearest the "Peak buy weight" you set above (a percentage of the ladder's own depth, default 50% — e.g. 50% of a -70% ladder lands the peak at -35%), then shrink geometrically beyond it, spaced evenly across the ladder down to the requested depth. If the resulting peak lands beyond the ladder's own reach, it clamps to the last buy and sizing grows the whole way instead. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, and the same buy-size shape when the peak is left at its default.
       </div>
     </div>
   </div>
 
   <!-- Position Status / Execute live outside #planResults on purpose: they
-       reflect the real MEXC account state, not the calculated plan, so they
+       reflect the real Bybit account state, not the calculated plan, so they
        must stay visible even when the plan calculation above is hidden or
        failed validation (e.g. $0 available balance while margin is tied up
        in an open position — exactly when seeing that position matters most). -->
@@ -312,7 +383,7 @@
     <div class="card" id="executeCard">
       <h2>Execute</h2>
       <div class="calc-btn-row" style="margin-top: 0;">
-        <button id="executeBtn">Execute plan on MEXC</button>
+        <button id="executeBtn">Execute plan on Bybit</button>
       </div>
       <div id="execStatus" class="price-status" style="margin-top: 10px;"></div>
       <div class="table-scroll">
@@ -329,7 +400,7 @@
         </table>
       </div>
       <div class="note" id="executeNote">
-        Places every buy row above as a MEXC Spot order (market for Buy #1, limit for the rest), using the same <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> as the rest of this app — the key just needs Spot trading permission enabled too, alongside whatever Futures permissions it already has. No leverage, no margin: every dollar of capital goes straight into buy orders, full stop.
+        Places every buy row above as a Bybit Spot order (market for Buy #1, limit for the rest), using the same <code>BYBIT_API_KEY</code> / <code>BYBIT_API_SECRET</code> as the rest of this app — the key just needs Spot trading permission enabled too, alongside whatever Futures permissions it already has. No leverage, no margin: every dollar of capital goes straight into buy orders, full stop.
       </div>
     </div>
 
@@ -354,7 +425,7 @@
     </div>
   </div>
 
-  <footer id="footerNote">Prices via MEXC Spot public ticker. Not financial advice.</footer>
+  <footer id="footerNote">Prices via Bybit Spot public ticker. Not financial advice.</footer>
 </div>
 
 <script src="calc.js"></script>
@@ -373,21 +444,71 @@ const fmtPrice = (n) => {
 const el = (id) => document.getElementById(id);
 let lastPlan = null;
 
+// Peak buy drawdown is entered/dragged as a PERCENTAGE OF THE TARGET
+// DRAWDOWN (e.g. "50" means "halfway down the ladder's own depth"), not an
+// absolute drawdown-from-entry percentage — see updatePeakFeasibility's
+// header comment for why: an absolute value can be deeper than the ladder
+// itself ever reaches once Target Drawdown is shallower than it, which is
+// meaningless (and used to silently just clamp to the last row). This
+// converts that relative value into the absolute percentage
+// computePlan/computeSpotPlan actually expect for sweetSpotDrawdownPct.
+// Every caller already has targetDrawdown in scope, but keeping the
+// conversion in one place avoids repeating the formula at each call site.
+function peakDrawdownAbsolutePct() {
+  const peakPct = parseFloat(el('peakDrawdown').value);
+  const targetDrawdownPct = parseFloat(el('targetDrawdown').value);
+  return (peakPct / 100) * targetDrawdownPct;
+}
+
 // Which tab is active — 'leveraged' (Futures, isolated margin) or 'spot'
 // (plain DCA, no leverage/margin/liquidation at all). Nearly every handler
 // below dispatches on this first, then (for the real, non-demo path) on
 // demoMode second.
 let mode = 'spot';
 
+// Which exchange the current tab talks to — 'bybit' or 'mexc'. Both
+// exchanges run through the SAME calculator engine (calc.js, the UI, every
+// feature below) — only symbol formatting (toFuturesSymbol) and which
+// server endpoint branch handles a request differ, via an `exchange` query/
+// body param threaded through every fetch call below. Remembered across page
+// loads (not per-tab — switching Spot/Leveraged keeps whichever exchange was
+// last selected) so returning to the app lands back on whichever account you
+// were actually using.
+const EXCHANGE_LABEL = { bybit: 'Bybit', mexc: 'MEXC' };
+
+let exchange = 'bybit';
+try {
+  const savedExchange = localStorage.getItem('lastExchange');
+  if (savedExchange === 'bybit' || savedExchange === 'mexc') exchange = savedExchange;
+} catch {
+  // localStorage unavailable — fall back to the default
+}
+el('exchangeBybitBtn').classList.toggle('active', exchange === 'bybit');
+el('exchangeMexcBtn').classList.toggle('active', exchange === 'mexc');
+
+// MODE_COPY below is written Bybit-first; this does a plain text swap for
+// the MEXC case rather than maintaining a second full copy of every string —
+// low-risk since it only touches display text, never logic. Handles both the
+// exchange name itself and the two env var names mentioned in the Execute
+// card's note.
+function exchangeCopy(text) {
+  if (exchange !== 'mexc') return text;
+  return text.replace(/Bybit/g, 'MEXC').replace(/BYBIT_API_KEY/g, 'MEXC_API_KEY').replace(/BYBIT_API_SECRET/g, 'MEXC_API_SECRET');
+}
+
 // Demo mode — set via the DEMO_MODE env var on a *separate* Vercel project
 // pointed at this same repo (see README's "Demo instance" section). When
-// on, nothing on this page ever calls a real MEXC endpoint that needs
+// on, nothing on this page ever calls a real Bybit endpoint that needs
 // account access: balance/position/orders are simulated entirely in the
 // browser via localStorage, using the same math (statusCalc.js) as the
 // real Position Status card so the numbers behave identically. The
-// simulated account is split per mode (account.leveraged / account.spot)
-// so switching tabs in the demo behaves like two independent accounts,
-// same as the real MEXC Futures wallet and Spot wallet are independent.
+// simulated account is split per mode (account.leveraged / account.spot) so
+// switching tabs in the demo behaves like two independent accounts — this is
+// a simplification for the demo, not a mirror of the real account: Bybit's
+// Unified Trading Account (UTA) actually shares ONE pool of collateral
+// between Spot and Leveraged/derivatives, unlike MEXC's genuinely separate
+// Futures/Spot wallets that this split was originally modeled on. See
+// api/balance.js's header comment.
 let demoMode = false;
 const DEMO_STORAGE_KEY = 'demoAccount';
 const DEMO_STARTING_BALANCE = 1000;
@@ -432,12 +553,20 @@ async function initDemoMode() {
   }
 }
 
-const toFuturesSymbol = (raw) => {
+// Bybit uses the same symbol format everywhere — no separator (CRVUSDT) —
+// for both linear (Leveraged tab) and spot (Spot tab) categories. MEXC needs
+// "CRV_USDT" (underscore) for futures but "CRVUSDT" (no underscore, same as
+// Bybit) for spot — its Spot v3 API and its Futures API are genuinely
+// different products with different symbol conventions. Both functions take
+// the exchange explicitly (defaulting to the current global `exchange`) so a
+// caller probing a DIFFERENT exchange (see selectInitialTabByPosition) can
+// still build the right symbol without touching global state.
+const toFuturesSymbol = (raw, exch = exchange) => {
   const s = raw.trim().toUpperCase();
-  return s.endsWith('_USDT') ? s : `${s}_USDT`;
+  const base = s.endsWith('USDT') ? s.slice(0, -4) : s;
+  return exch === 'mexc' ? `${base}_USDT` : `${base}USDT`;
 };
 
-// Spot symbols have no separator (CRVUSDT, not CRV_USDT).
 const toSpotSymbol = (raw) => {
   const s = raw.trim().toUpperCase();
   return s.endsWith('USDT') ? s : `${s}USDT`;
@@ -451,54 +580,61 @@ const ORDER_TYPE_LABEL = { 1: 'Limit', 2: 'Post Only', 3: 'IOC', 4: 'FOK', 5: 'M
 const MODE_COPY = {
   leveraged: {
     title: 'Leveraged DCA Ladder Calculator',
-    subtitle: 'Isolated-margin laddered buys sized to survive a target drawdown before liquidation. Live prices from MEXC Futures.',
-    drawdownLabel: 'Drawdown coverage (%)',
-    coveredLabel: 'Drawdown covered',
-    volHeader: 'Vol (contracts)',
-    ladderNote: 'Fees and funding are ignored. Liquidation price uses MEXC\'s isolated-margin formula: Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity. Buy sizes grow geometrically (×1.26 per step) up to the buy nearest -35% drawdown — the "sweet spot" this plan wants to buy the most at — then shrink geometrically beyond it. The ladder is still spaced evenly in drawdown across the buys, leaving one spacing unit of buffer before the liquidation target. The "Liquidation ($)" column is the real, immediate price using only committed buy margin — it ignores the untouched margin buffer, which this app never injects into the position itself; "Needs auto-margin" rows are ones relying on MEXC\'s own Auto-Margin feature to draw from that buffer before the next buy. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price.',
-    executeNote: 'Places every "Limit Buy" row above as an isolated-margin, open-long limit order on MEXC Futures (requires <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> set as environment variables in Vercel). Whatever of "Available balance" wasn\'t actually committed to a placed order — computed from each order\'s real, exchange-rounded fill size rather than the plan\'s theoretical numbers — is reported back as informational only, and stays in your futures wallet. This app never adds it to the position itself: it\'s left there for MEXC\'s own Auto-Margin feature (enable it on the position in the MEXC app) to draw on automatically if liquidation becomes imminent.',
-    dangerNote: 'Cancels every open order and flash-closes any open position on the asset entered above, at market, on MEXC. This is account-flattening for that one symbol only — it cannot be undone.',
-    footer: 'Prices via MEXC Futures public ticker. Not financial advice.',
+    subtitle: 'Isolated-margin laddered buys, full manual control over sizing and how deep the ladder reaches. Live prices from Bybit Futures.',
+    drawdownLabel: 'Target drawdown (%)',
+    coveredLabel: 'Ladder depth',
+    volHeader: 'Qty',
+    ladderNote: 'Fees and funding are ignored. 100% of "Capital to deploy" is committed directly as margin across the ladder — nothing is held back as a reserve. Buy sizes grow geometrically (×1.26 per step) up to the buy nearest the "Peak buy weight" you set above (a percentage of the target drawdown itself, default 50% — e.g. 50% of a -70% target lands the peak at -35%) — that\'s the drawdown you want this plan to buy the most at — then shrink geometrically beyond it, spaced evenly across the ladder down to the requested target drawdown. If the resulting peak lands beyond the ladder\'s own reach, it clamps to the last buy and sizing grows the whole way instead. Liquidation price uses the isolated-margin formula (Avg Entry × (1 + MMR) − Total Margin Deployed ÷ Quantity) and is shown per row purely as a real, informational read-out from margin actually committed so far — it is not a target this plan solves for. Below the slider, a live green/amber/red readout shows whether this weight position actually reaches the full target drawdown before liquidation, or where it falls short. You can still enable Bybit\'s Auto-Margin Replenishment (AMR) on the resulting position from the Bybit app as a general safety net if you want one; this calculator doesn\'t design around it. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Spot tab for the same inputs, and the same buy-size shape when the peak is left at its default.',
+    executeNote: 'Places every "Limit Buy" row above as an isolated-margin, open-long order on Bybit linear (USDT perpetual) futures (requires <code>BYBIT_API_KEY</code> / <code>BYBIT_API_SECRET</code> set as environment variables in Vercel). Whatever of "Capital to deploy" wasn\'t actually committed to a placed order — computed from each order\'s real, exchange-rounded fill size rather than the plan\'s theoretical numbers — is reported back as informational only (rounding/precision drift, not a deliberate reserve), and stays in your available balance.',
+    dangerNote: 'Cancels every open order and flash-closes any open position on the asset entered above, at market, on Bybit. This is account-flattening for that one symbol only — it cannot be undone.',
+    footer: 'Prices via Bybit Futures public ticker. Not financial advice.',
   },
   spot: {
     title: 'Spot DCA Ladder Calculator',
-    subtitle: 'Plain dollar-cost-averaging buys — no leverage, no margin, no liquidation. Live prices from MEXC Spot.',
+    subtitle: 'Plain dollar-cost-averaging buys — no leverage, no margin, no liquidation. Live prices from Bybit Spot.',
     drawdownLabel: 'Ladder depth (%)',
     coveredLabel: 'Ladder depth',
     volHeader: 'Qty',
-    ladderNote: 'Fees are ignored. There\'s no leverage or liquidation here — every dollar of "Available balance" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) up to the buy nearest the "Peak buy drawdown" set above (default -35%), then shrink geometrically beyond it, spaced evenly across the ladder down to the requested depth. If the peak drawdown falls beyond the ladder\'s own reach, it clamps to the last buy and sizing grows the whole way instead. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, and the same buy-size shape when the peak is left at its default.',
-    executeNote: 'Places every buy row above as a MEXC Spot order (market for Buy #1, limit for the rest), using the same <code>MEXC_API_KEY</code> / <code>MEXC_API_SECRET</code> as the rest of this app — the key just needs Spot trading permission enabled too, alongside whatever Futures permissions it already has. No leverage, no margin: every dollar of capital goes straight into buy orders, full stop.',
+    ladderNote: 'Fees are ignored. There\'s no leverage or liquidation here — every dollar of "Available balance" is spent directly on the asset. Buy sizes grow geometrically (×1.26 per step) up to the buy nearest the "Peak buy weight" you set above (a percentage of the ladder\'s own depth, default 50% — e.g. 50% of a -70% ladder lands the peak at -35%), then shrink geometrically beyond it, spaced evenly across the ladder down to the requested depth. If the resulting peak lands beyond the ladder\'s own reach, it clamps to the last buy and sizing grows the whole way instead. Buy #1 executes as a market order (fills immediately at the live price); every other buy is a limit order resting at its ladder price. Uses the exact same trigger prices as the Leveraged tab for the same inputs, and the same buy-size shape when the peak is left at its default.',
+    executeNote: 'Places every buy row above as a Bybit Spot order (market for Buy #1, limit for the rest), using the same <code>BYBIT_API_KEY</code> / <code>BYBIT_API_SECRET</code> as the rest of this app — the key just needs Spot trading permission enabled too, alongside whatever Futures permissions it already has. No leverage, no margin: every dollar of capital goes straight into buy orders, full stop.',
     dangerNote: 'Cancels every open order and market-sells your ENTIRE free balance of the asset entered above back to USDT. This is account-flattening for that one asset only — it cannot be undone.',
-    footer: 'Prices via MEXC Spot public ticker. Not financial advice.',
+    footer: 'Prices via Bybit Spot public ticker. Not financial advice.',
   },
 };
 
+// Re-applies the current mode's copy text (title, subtitle, notes, footer)
+// through exchangeCopy() — split out of setMode() so setExchange() can
+// refresh the same text WITHOUT re-running setMode()'s full tab-switch side
+// effects (clearing lastPlan, hiding results, etc.) when only the exchange
+// changed, not the tab.
+function applyModeCopy() {
+  const copy = MODE_COPY[mode];
+  el('pageTitle').textContent = copy.title;
+  el('pageSubtitle').textContent = exchangeCopy(copy.subtitle);
+  el('targetDrawdownLabel').textContent = copy.drawdownLabel;
+  el('sumCoveredLabel').textContent = copy.coveredLabel;
+  el('execVolHeader').textContent = copy.volHeader;
+  el('ladderNote').innerHTML = exchangeCopy(copy.ladderNote);
+  el('executeNote').innerHTML = exchangeCopy(copy.executeNote);
+  el('dangerNote').textContent = exchangeCopy(copy.dangerNote);
+  el('footerNote').textContent = exchangeCopy(copy.footer);
+}
+
 function setMode(newMode) {
   mode = newMode;
-  const copy = MODE_COPY[mode];
   const isSpot = mode === 'spot';
 
   el('tabLeveraged').classList.toggle('active', !isSpot);
   el('tabSpot').classList.toggle('active', isSpot);
 
-  el('pageTitle').textContent = copy.title;
-  el('pageSubtitle').textContent = copy.subtitle;
-  el('targetDrawdownLabel').textContent = copy.drawdownLabel;
-  el('sumCoveredLabel').textContent = copy.coveredLabel;
-  el('execVolHeader').textContent = copy.volHeader;
-  el('ladderNote').innerHTML = copy.ladderNote;
-  el('executeNote').innerHTML = copy.executeNote;
-  el('dangerNote').textContent = copy.dangerNote;
-  el('footerNote').textContent = copy.footer;
+  applyModeCopy();
 
   el('leverageField').style.display = isSpot ? 'none' : '';
   el('mmrField').style.display = isSpot ? 'none' : '';
-  el('spotPeakField').style.display = isSpot ? '' : 'none';
-  el('sumMarginStat').style.display = isSpot ? 'none' : '';
-  el('sumNaiveLiqStat').style.display = isSpot ? 'none' : '';
+  // Peak buy weight and the "All Funds"/"Custom Amount" capital toggle now
+  // apply to both tabs identically — no per-tab hiding or state reset needed.
   el('sumLiqStat').style.display = isSpot ? 'none' : '';
   el('liqColHeader').style.display = isSpot ? 'none' : '';
-  el('autoMarginColHeader').style.display = isSpot ? 'none' : '';
   el('posLeverageStat').style.display = isSpot ? 'none' : '';
   el('posLiqStat').style.display = isSpot ? 'none' : '';
 
@@ -508,6 +644,15 @@ function setMode(newMode) {
   el('errorBox').style.display = 'none';
   el('priceStatus').textContent = '';
   el('balanceStatus').textContent = '';
+
+  // Refresh the capital-mode note's wording for the newly-active tab (e.g.
+  // "Spot USDT balance" vs "Futures available balance") without changing
+  // capitalMode itself.
+  setCapitalMode(capitalMode);
+
+  // Leveraged-only feasibility indicator — hides itself on Spot (no
+  // leverage/liquidation there), refreshes on Leveraged.
+  updatePeakFeasibility();
 
   Promise.all([fetchLivePrice(), fetchLiveBalance()]).then(() => {
     el('calcBtn').click();
@@ -562,8 +707,32 @@ function renderPositionStatus(data) {
       sinceLabel.textContent = `Since ${new Date(data.sinceTime).toLocaleString()}`;
       sinceLabel.className = 'price-status';
     } else {
-      sinceLabel.textContent = 'Could not find the market buy that started this run — showing all orders found.';
+      const daysSearched = data.orderDebug && data.orderDebug.historyLookbackDaysSearched;
+      sinceLabel.textContent = daysSearched
+        ? `Could not find the market buy that started this run in the last ${daysSearched} days of order history — showing all orders found.`
+        : 'Could not find the market buy that started this run — showing all orders found.';
       sinceLabel.className = 'price-status err';
+    }
+
+    // TEMPORARY DIAGNOSTIC (2026-08-24) — see api/status.js's matching
+    // comment. Remove this block (and orderDebug/ordersError in
+    // api/status.js) once the missing-resting-orders cause is confirmed
+    // fixed.
+    const errNote = el('ordersErrorNote');
+    if (data.ordersError) {
+      errNote.style.display = '';
+      errNote.textContent = `Order list fetch problem: ${data.ordersError}`;
+    } else {
+      errNote.style.display = 'none';
+      errNote.textContent = '';
+    }
+    const debugBox = el('orderDebugBox');
+    if (data.orderDebug) {
+      debugBox.style.display = '';
+      debugBox.textContent = JSON.stringify(data.orderDebug, null, 2);
+    } else {
+      debugBox.style.display = 'none';
+      debugBox.textContent = '';
     }
 
     const tbody = document.querySelector('#statusTable tbody');
@@ -617,17 +786,33 @@ async function checkPositionStatus() {
 }
 
 // In demo mode this reads the simulated position from localStorage instead
-// of calling MEXC, computing PnL/liquidation with the same statusCalc.js
+// of calling Bybit, computing PnL/liquidation with the same statusCalc.js
 // math the server uses.
-async function checkLeveragedPositionStatus() {
-  const symbol = toFuturesSymbol(el('symbol').value);
+//
+// Returns { hasPosition, openedByApp } (used by selectInitialTabByPosition
+// below to decide which tab to land on at page load) — every existing call
+// site already ignores the return value, so this is purely additive.
+// openedByApp mirrors api/status.js's field of the same name: true if the
+// market buy that opened the position carries this app's own orderLinkId
+// tag (see bybitClient.js's makeOrderLinkId), i.e. it was placed through
+// this calculator rather than manually on Bybit directly. A demo-mode
+// position is always treated as app-opened — it only exists because this
+// app's own demo flow created it.
+// `exch` defaults to the currently-selected exchange, but can be overridden
+// by selectInitialTabByPosition below to probe the OTHER exchange without
+// touching global state — see that function's header comment. Demo mode
+// stays exchange-agnostic on purpose (it's simulated data either way, and
+// doubling the simulated-account structure per exchange would add real
+// complexity for no real benefit).
+async function checkLeveragedPositionStatus(exch = exchange) {
+  const symbol = toFuturesSymbol(el('symbol').value, exch);
 
   if (demoMode) {
     const account = loadDemoAccount();
     const position = account.leveraged.position;
     if (!position || position.symbol !== symbol) {
       renderPositionStatus({ hasPosition: false });
-      return;
+      return { hasPosition: false, openedByApp: false };
     }
     const currentPrice = Number(el('entry').value) || position.holdAvgPrice;
     const pnl = computePnl({
@@ -656,18 +841,20 @@ async function checkLeveragedPositionStatus() {
       sinceTime: position.sinceTime,
       orders: position.orders,
     });
-    return;
+    return { hasPosition: true, openedByApp: true };
   }
 
   try {
-    const res = await fetch(`/api/status?symbol=${encodeURIComponent(symbol)}`);
+    const res = await fetch(`/api/status?symbol=${encodeURIComponent(symbol)}&exchange=${exch}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Could not check position status.');
-    renderPositionStatus(data);
+    if (exch === exchange) renderPositionStatus(data);
+    return { hasPosition: !!data.hasPosition, openedByApp: !!data.openedByApp };
   } catch (err) {
     // Don't block the calculator over a failed status check — just log it
     // and leave whichever card was already showing (defaults to Execute).
     console.error('Position status check failed:', err.message || err);
+    return { hasPosition: false, openedByApp: false };
   }
 }
 
@@ -676,7 +863,9 @@ async function checkLeveragedPositionStatus() {
 // holdings from filled orders and maps them into the exact same shape
 // Futures orders use, so renderPositionStatus() needs no spot-specific
 // branching of its own.
-async function checkSpotPositionStatus() {
+// Returns { hasPosition, openedByApp } — see checkLeveragedPositionStatus's
+// matching comment.
+async function checkSpotPositionStatus(exch = exchange) {
   const symbol = toSpotSymbol(el('symbol').value);
 
   if (demoMode) {
@@ -684,7 +873,7 @@ async function checkSpotPositionStatus() {
     const position = account.spot.position;
     if (!position || position.symbol !== symbol) {
       renderPositionStatus({ hasPosition: false });
-      return;
+      return { hasPosition: false, openedByApp: false };
     }
     const currentPrice = Number(el('entry').value) || position.holdAvgPrice;
     const costBasis = position.holdAvgPrice * position.holdVol; // no leverage — cost basis IS the capital at risk
@@ -704,20 +893,160 @@ async function checkSpotPositionStatus() {
       sinceTime: position.sinceTime,
       orders: position.orders,
     });
-    return;
+    return { hasPosition: true, openedByApp: true };
   }
 
   try {
-    const res = await fetch(`/api/spot/status?symbol=${encodeURIComponent(symbol)}`);
+    const res = await fetch(`/api/spot/status?symbol=${encodeURIComponent(symbol)}&exchange=${exch}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Could not check position status.');
-    renderPositionStatus(data);
+    if (exch === exchange) renderPositionStatus(data);
+    return { hasPosition: !!data.hasPosition, openedByApp: !!data.openedByApp };
   } catch (err) {
     console.error('Spot position status check failed:', err.message || err);
+    return { hasPosition: false, openedByApp: false };
   }
 }
 
-// Pulls the live MEXC price into the Entry field. Shared by the "Get price"
+// Page-load only: check BOTH tabs on BOTH exchanges (4 combos) for an open
+// position on the current Asset symbol, and land on whichever one actually
+// has one — requested after a real leveraged position sat open while the
+// page defaulted to the Spot tab, so the position wasn't the first thing on
+// screen; extended to cover both exchanges once MEXC was added back
+// alongside Bybit, so an open position isn't missed just because it's on
+// whichever exchange wasn't already selected.
+//
+// Each combo is scored (lower wins) on three factors, in priority order:
+//   1. App-opened beats manually-opened (weight 100) — an app-managed
+//      ladder (openedByApp, per bybitClient.js's/mexcClient.js's order
+//      tagging) is real risk this app is actively managing and worth seeing
+//      immediately; something opened manually on the exchange directly (e.g.
+//      the account's existing HBAR position, opened outside this app) is
+//      real too, but ranked below an app-managed ladder on EITHER tab or
+//      exchange.
+//   2. Leveraged beats Spot (weight 10) — real liquidation risk takes
+//      priority over a plain holding, as a tiebreak among equally
+//      app-opened-or-not candidates.
+//   3. The last-used exchange beats the other one (weight 1) — the finest
+//      tiebreak, only relevant when equally-ranked positions exist on both
+//      exchanges at once.
+// Only combos that actually have a position are considered; if none do, the
+// default (Spot, last-used exchange) is left alone.
+//
+// The four checks run regardless of the CURRENT mode/exchange —
+// checkLeveragedPositionStatus/checkSpotPositionStatus build their own
+// symbol from whatever (mode, exchange) combo they're given — so this is
+// safe to call before setMode()/setExchange() have ever run for real.
+// Returns whether it switched, so the caller knows whether the normal
+// per-mode load flow (price/balance/calc/status) still needs to run for the
+// untouched default, or whether setMode() below already triggered it for
+// the combo this switched to.
+// Fallback for selectInitialTabByPosition below, used ONLY when the
+// Symbol field's current value (whatever it happens to be on load -- the
+// static "CRV" default, or whatever was last typed/reset) has no position
+// on any of the 4 (exchange x mode) combos. That's not the same as "nothing
+// is open" -- it just means the account's real activity has moved to a
+// DIFFERENT symbol than what's sitting in the field, e.g. a fresh page load
+// after switching from a CRV ladder to an ENA one. Scans every symbol with
+// an open Leveraged position or a nonzero Spot balance, across both
+// exchanges, via api/status.js's/api/spot/[action].js's cheap `discover`
+// modes (one API call per exchange per mode, no per-symbol order-history
+// walk or app-tag check -- see those endpoints' header comments), and
+// returns the single best base-asset symbol to try next, or null if
+// discovery finds nothing anywhere either.
+//
+// Ranking mirrors selectInitialTabByPosition's own score() as closely as
+// discovery data allows: Leveraged beats Spot (real liquidation risk over a
+// plain holding), then most-recently-touched wins as the tiebreak (Bybit's
+// updatedTime / MEXC's updateTime for Leveraged positions -- Spot balances
+// carry no such timestamp, so equally-ranked Spot candidates just take
+// whichever the account listing returned first), then the current exchange
+// preference as the final tiebreak. This does NOT check openedByApp (too
+// expensive to do for every discovered symbol up front) -- that's fine,
+// because whichever symbol wins here gets run back through the EXACT same
+// fully-scored, app-tag-aware logic selectInitialTabByPosition already uses
+// for a known symbol, just with the Symbol field updated first.
+async function discoverActiveSymbol() {
+  const preferredExchange = exchange;
+  const otherExchange = preferredExchange === 'bybit' ? 'mexc' : 'bybit';
+
+  const safeJson = async (url) => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  };
+
+  const [prefLev, otherLev, prefSpot, otherSpot] = await Promise.all([
+    safeJson(`/api/status?discover=1&exchange=${preferredExchange}`),
+    safeJson(`/api/status?discover=1&exchange=${otherExchange}`),
+    safeJson(`/api/spot/discover?exchange=${preferredExchange}`),
+    safeJson(`/api/spot/discover?exchange=${otherExchange}`),
+  ]);
+
+  const candidates = [];
+  (prefLev?.symbols || []).forEach((s) => candidates.push({ asset: s.asset, mode: 'leveraged', exch: preferredExchange, updatedTime: s.updatedTime || 0 }));
+  (otherLev?.symbols || []).forEach((s) => candidates.push({ asset: s.asset, mode: 'leveraged', exch: otherExchange, updatedTime: s.updatedTime || 0 }));
+  (prefSpot?.assets || []).forEach((a) => candidates.push({ asset: a, mode: 'spot', exch: preferredExchange, updatedTime: 0 }));
+  (otherSpot?.assets || []).forEach((a) => candidates.push({ asset: a, mode: 'spot', exch: otherExchange, updatedTime: 0 }));
+
+  if (candidates.length === 0) return null;
+
+  const score = (c) => (c.mode === 'leveraged' ? 0 : 10) + (c.exch === preferredExchange ? 0 : 1);
+  candidates.sort((a, b) => {
+    const s = score(a) - score(b);
+    if (s !== 0) return s;
+    return b.updatedTime - a.updatedTime; // most-recently-touched first, among equally-scored candidates
+  });
+
+  return candidates[0].asset;
+}
+
+// `triedDiscovery` guards against re-entering the discovery fallback a
+// second time (it always sets a symbol found on the account, so a repeat
+// call would find the exact same thing and loop forever otherwise).
+async function selectInitialTabByPosition(triedDiscovery) {
+  const preferredExchange = exchange;
+  const otherExchange = preferredExchange === 'bybit' ? 'mexc' : 'bybit';
+
+  const [prefLeveraged, prefSpot, otherLeveraged, otherSpot] = await Promise.all([
+    checkLeveragedPositionStatus(preferredExchange),
+    checkSpotPositionStatus(preferredExchange),
+    checkLeveragedPositionStatus(otherExchange),
+    checkSpotPositionStatus(otherExchange),
+  ]);
+
+  const candidates = [
+    { mode: 'leveraged', exch: preferredExchange, ...prefLeveraged },
+    { mode: 'spot', exch: preferredExchange, ...prefSpot },
+    { mode: 'leveraged', exch: otherExchange, ...otherLeveraged },
+    { mode: 'spot', exch: otherExchange, ...otherSpot },
+  ].filter((c) => c.hasPosition);
+
+  if (candidates.length === 0) {
+    if (triedDiscovery) return false; // already tried the fallback once -- nothing anywhere, give up
+    const discoveredAsset = await discoverActiveSymbol();
+    if (!discoveredAsset || discoveredAsset === el('symbol').value.trim().toUpperCase()) return false;
+    el('symbol').value = discoveredAsset;
+    return selectInitialTabByPosition(true);
+  }
+
+  const score = (c) => (c.openedByApp ? 0 : 100) + (c.mode === 'leveraged' ? 0 : 10) + (c.exch === preferredExchange ? 0 : 1);
+  candidates.sort((a, b) => score(a) - score(b));
+  const target = candidates[0];
+
+  if (target.mode !== mode || target.exch !== exchange) {
+    if (target.exch !== exchange) setExchange(target.exch, { skipFetch: true });
+    setMode(target.mode);
+    return true;
+  }
+  return false;
+}
+
+// Pulls the live Bybit price into the Entry field. Shared by the "Get price"
 // button and the automatic page-load / tab-switch / Reset refresh.
 async function fetchLivePrice() {
   return mode === 'spot' ? fetchSpotPrice() : fetchLeveragedPrice();
@@ -726,20 +1055,20 @@ async function fetchLivePrice() {
 async function fetchLeveragedPrice() {
   const symRaw = el('symbol').value.trim().toUpperCase();
   if (!symRaw) return;
-  const symbol = symRaw.endsWith('_USDT') ? symRaw : `${symRaw}_USDT`;
+  const symbol = toFuturesSymbol(symRaw);
   const statusEl = el('priceStatus');
   statusEl.textContent = 'Fetching…';
   statusEl.className = 'price-status pending';
   el('fetchBtn').disabled = true;
   try {
-    const res = await fetch(`/api/price?symbol=${encodeURIComponent(symbol)}`);
+    const res = await fetch(`/api/price?symbol=${encodeURIComponent(symbol)}&exchange=${exchange}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to fetch price.');
     if (!(Number(data.lastPrice) > 0)) {
       throw new Error(`Got an invalid price (${data.lastPrice}) for ${data.symbol} — leaving Entry price unchanged.`);
     }
     el('entry').value = data.lastPrice;
-    statusEl.textContent = `${data.symbol} last price: $${data.lastPrice} (MEXC Futures)`;
+    statusEl.textContent = `${data.symbol} last price: $${data.lastPrice} (${EXCHANGE_LABEL[exchange]} Futures)`;
     statusEl.className = 'price-status ok';
   } catch (err) {
     statusEl.textContent = err.message || 'Could not fetch price — enter it manually.';
@@ -758,14 +1087,14 @@ async function fetchSpotPrice() {
   statusEl.className = 'price-status pending';
   el('fetchBtn').disabled = true;
   try {
-    const res = await fetch(`/api/spot/price?symbol=${encodeURIComponent(symbol)}`);
+    const res = await fetch(`/api/spot/price?symbol=${encodeURIComponent(symbol)}&exchange=${exchange}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to fetch price.');
     if (!(Number(data.lastPrice) > 0)) {
       throw new Error(`Got an invalid price (${data.lastPrice}) for ${data.symbol} — leaving Entry price unchanged.`);
     }
     el('entry').value = data.lastPrice;
-    statusEl.textContent = `${data.symbol} last price: $${data.lastPrice} (MEXC Spot)`;
+    statusEl.textContent = `${data.symbol} last price: $${data.lastPrice} (${EXCHANGE_LABEL[exchange]} Spot)`;
     statusEl.className = 'price-status ok';
   } catch (err) {
     statusEl.textContent = err.message || 'Could not fetch price — enter it manually.';
@@ -799,7 +1128,7 @@ async function closeLeveragedPosition() {
   const symbol = toFuturesSymbol(el('symbol').value);
   const confirmMsg = demoMode
     ? `Close the simulated ${symbol} position and clear all simulated orders? This is a demo — nothing real happens.`
-    : `Close the ENTIRE ${symbol} position and cancel ALL open orders on MEXC? This cannot be undone.`;
+    : `Close the ENTIRE ${symbol} position and cancel ALL open orders on ${EXCHANGE_LABEL[exchange]}? This cannot be undone.`;
   const ok = confirm(confirmMsg);
   if (!ok) return;
 
@@ -832,7 +1161,7 @@ async function closeLeveragedPosition() {
     const res = await fetch('/api/close', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol }),
+      body: JSON.stringify({ symbol, exchange }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Close failed.');
@@ -909,7 +1238,7 @@ async function closeSpotPosition() {
     const res = await fetch('/api/spot/close', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, baseAsset }),
+      body: JSON.stringify({ symbol, baseAsset, exchange }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Close failed.');
@@ -958,7 +1287,7 @@ el('logoutBtn').addEventListener('click', async () => {
   window.location.href = '/login.html';
 });
 
-// Pulls the live MEXC usable balance into the Available balance field. Shared
+// Pulls the live Bybit usable balance into the Available balance field. Shared
 // by the "Get balance" button and the automatic page-load / tab-switch /
 // Reset refresh.
 async function fetchLiveBalance() {
@@ -973,7 +1302,7 @@ async function fetchLeveragedBalance() {
 
   if (demoMode) {
     // Simulated bankroll minus margin committed to any open simulated
-    // position — no MEXC account involved.
+    // position — no Bybit account involved.
     const account = loadDemoAccount();
     const committed = account.leveraged.position ? Number(account.leveraged.position.im) : 0;
     const available = Math.max(0, account.leveraged.balance - committed);
@@ -985,7 +1314,7 @@ async function fetchLeveragedBalance() {
   }
 
   try {
-    const res = await fetch('/api/balance?currency=USDT');
+    const res = await fetch(`/api/balance?currency=USDT&exchange=${exchange}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to fetch balance.');
     const usable = Number(data.availableOpen);
@@ -997,7 +1326,7 @@ async function fetchLeveragedBalance() {
     // margin is a normal state, not an error, so it gets the same "ok"
     // styling as any other balance.
     el('capital').value = usableRounded.toFixed(2);
-    statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Futures)`;
+    statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (${EXCHANGE_LABEL[exchange]} Futures)`;
     statusEl.className = 'price-status ok';
   } catch (err) {
     statusEl.textContent = err.message || 'Could not fetch balance — enter it manually.';
@@ -1026,13 +1355,13 @@ async function fetchSpotBalance() {
   }
 
   try {
-    const res = await fetch('/api/spot/balance?asset=USDT');
+    const res = await fetch(`/api/spot/balance?asset=USDT&exchange=${exchange}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to fetch balance.');
     const usable = Number(data.free);
     const usableRounded = Number(usable.toFixed(2));
     el('capital').value = usableRounded.toFixed(2);
-    statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (MEXC Spot)`;
+    statusEl.textContent = `Usable balance: $${fmt2(usable)} USDT (${EXCHANGE_LABEL[exchange]} Spot)`;
     statusEl.className = 'price-status ok';
   } catch (err) {
     statusEl.textContent = err.message || 'Could not fetch balance — enter it manually.';
@@ -1048,11 +1377,18 @@ el('calcBtn').addEventListener('click', () => {
   return mode === 'spot' ? calculateSpotPlan() : calculateLeveragedPlan();
 });
 
-function calculateLeveragedPlan() {
+async function calculateLeveragedPlan() {
   const errorBox = el('errorBox');
   const resultsBox = el('planResults');
   errorBox.style.display = 'none';
   resultsBox.style.display = 'none';
+
+  // "All Funds" mode: pull the live balance fresh right now rather than
+  // trusting whatever number happens to already be sitting in the capital
+  // field — same reasoning as calculateSpotPlan.
+  if (capitalMode === 'all') {
+    await fetchLeveragedBalance();
+  }
 
   const params = {
     entry: parseFloat(el('entry').value),
@@ -1061,6 +1397,7 @@ function calculateLeveragedPlan() {
     capital: parseFloat(el('capital').value),
     numBuys: parseInt(el('numBuys').value, 10),
     targetDrawdownPct: parseFloat(el('targetDrawdown').value),
+    sweetSpotDrawdownPct: peakDrawdownAbsolutePct(),
   };
 
   if (Object.values(params).some((v) => Number.isNaN(v))) {
@@ -1084,25 +1421,17 @@ function calculateLeveragedPlan() {
   el('execTable').style.display = 'none';
 
   el('sumBuys').textContent = `$${fmt2(result.totalBuys)}`;
-  el('sumMargin').textContent = `$${fmt2(result.margin)}`;
   el('sumDeployed').textContent = `$${fmt2(result.totalDeployed)}`;
   el('sumQty').textContent = fmtQty(result.finalQty);
   el('sumAvg').textContent = `$${fmtPrice(result.finalAvgEntry)}`;
-  el('sumNaiveLiq').textContent = `$${fmtPrice(result.naiveFinalLiq)}`;
-  el('sumLiq').textContent = `$${fmtPrice(result.protectedFinalLiq)}`;
-  el('sumCovered').textContent = `${(result.drawdownCovered * 100).toFixed(2)}%`;
+  el('sumLiq').textContent = `$${fmtPrice(result.finalLiq)}`;
+  el('sumCovered').textContent = `${(result.ladderDepth * 100).toFixed(2)}%`;
 
   const tbody = document.querySelector('#planTable tbody');
   tbody.innerHTML = '';
   result.rows.forEach((row) => {
     const tr = document.createElement('tr');
-    // Peak (sweet-spot) row gets the emphasis styling that used to mark the
-    // "Add Margin" row — this app no longer has an active margin-add step;
-    // the peak buy is now the visually-flagged row instead.
     const displayAction = row.step === 1 ? 'Market Buy #1' : row.action;
-    const autoMarginCell = row.autoMarginNeeded
-      ? '<span class="auto-margin-yes">Yes</span>'
-      : '<span class="auto-margin-no">No</span>';
     tr.innerHTML = `
       <td>${row.step}</td>
       <td class="${row.isPeak ? 'action-peak' : 'action-buy'}">${displayAction}${row.isPeak ? ' ★' : ''}</td>
@@ -1113,7 +1442,6 @@ function calculateLeveragedPlan() {
       <td>${fmtQty(row.cumQty)}</td>
       <td>$${fmtPrice(row.avgEntry)}</td>
       <td>$${fmtPrice(row.liq)}</td>
-      <td>${autoMarginCell}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -1121,18 +1449,26 @@ function calculateLeveragedPlan() {
   resultsBox.style.display = 'block';
 }
 
-function calculateSpotPlan() {
+async function calculateSpotPlan() {
   const errorBox = el('errorBox');
   const resultsBox = el('planResults');
   errorBox.style.display = 'none';
   resultsBox.style.display = 'none';
+
+  // "All Funds" mode: pull the live balance fresh right now rather than
+  // trusting whatever number happens to already be sitting in the capital
+  // field — see setCapitalMode's header comment for why this re-check
+  // matters at both Calculate and Execute time, not just once.
+  if (capitalMode === 'all') {
+    await fetchSpotBalance();
+  }
 
   const params = {
     entry: parseFloat(el('entry').value),
     capital: parseFloat(el('capital').value),
     numBuys: parseInt(el('numBuys').value, 10),
     targetDrawdownPct: parseFloat(el('targetDrawdown').value),
-    sweetSpotDrawdownPct: parseFloat(el('spotPeak').value),
+    sweetSpotDrawdownPct: peakDrawdownAbsolutePct(),
   };
 
   if (Object.values(params).some((v) => Number.isNaN(v))) {
@@ -1199,6 +1535,33 @@ async function executeLeveragedPlan() {
     return;
   }
 
+  // "All Funds" mode: re-check the live balance AND rebuild the plan against
+  // it right now, immediately before executing — not just at whatever point
+  // Calculate was last clicked. Same staleness concern as executeSpotPlan's
+  // identical block — see its comment for the full reasoning. If the fresh
+  // balance can't be read or no longer produces a valid plan (e.g. it's now
+  // $0), abort here with a clear message instead of silently executing
+  // against the old, now-stale lastPlan.
+  if (capitalMode === 'all') {
+    await fetchLeveragedBalance();
+    const freshCapital = parseFloat(el('capital').value);
+    try {
+      lastPlan = computePlan({
+        entry: parseFloat(el('entry').value),
+        leverage: parseFloat(el('leverage').value),
+        mmr: parseFloat(el('mmr').value) / 100,
+        capital: freshCapital,
+        numBuys: parseInt(el('numBuys').value, 10),
+        targetDrawdownPct: parseFloat(el('targetDrawdown').value),
+        sweetSpotDrawdownPct: peakDrawdownAbsolutePct(),
+      });
+    } catch (err) {
+      statusEl.textContent = `Could not re-plan against your current balance: ${err.message}`;
+      statusEl.className = 'price-status err';
+      return;
+    }
+  }
+
   const orders = lastPlan.rows
     .filter((r) => r.action.startsWith('Limit Buy'))
     .map((r) => ({ step: r.step, price: r.price, qty: r.newQty, market: r.step === 1 }));
@@ -1210,7 +1573,7 @@ async function executeLeveragedPlan() {
   const limitCount = orders.filter((o) => !o.market).length;
   const confirmMsg = demoMode
     ? `Simulate 1 market buy + ${limitCount} limit buy orders for ${symbol} (isolated, ${leverage}x)? This is a demo — no real funds or account involved.`
-    : `Place 1 market buy + ${limitCount} limit buy orders on MEXC for ${symbol} (isolated, ${leverage}x)? This uses real funds. Any leftover capital stays in your futures balance for MEXC's Auto-Margin feature to draw on before liquidation.`;
+    : `Place 1 market buy + ${limitCount} limit buy orders on ${EXCHANGE_LABEL[exchange]} for ${symbol} (isolated, ${leverage}x)? This uses real funds — no reserve is held back; the full capital amount is committed as margin across the ladder.`;
   const ok = confirm(confirmMsg);
   if (!ok) return;
 
@@ -1223,11 +1586,10 @@ async function executeLeveragedPlan() {
   if (demoMode) {
     // Fill the market buy immediately, leave the rest resting — same shape
     // as a real fresh Execute — and store it as this browser's simulated
-    // position. No network call, nothing touches MEXC. Whatever of `capital`
-    // isn't committed to the (simulated) orders stays out of the simulated
-    // position's margin entirely, mirroring the real backend: it's left as
-    // available balance for MEXC's (assumed-reliable) Auto-Margin feature to
-    // draw on before liquidation, not pushed in proactively by this app.
+    // position. No network call, nothing touches Bybit. `capital` is 100%
+    // committed as margin across the ladder by design now — any tiny
+    // leftover here is just simulated qty-rounding drift, same meaning as
+    // the Spot tab's, not a deliberate reserve.
     const mmr = parseFloat(el('mmr').value) / 100;
     const marketOrder = orders.find((o) => o.market);
     const committedMargin = orders.reduce((sum, o) => sum + (o.price * o.qty) / leverage, 0);
@@ -1283,7 +1645,7 @@ async function executeLeveragedPlan() {
     const res = await fetch('/api/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, leverage, capital, orders }),
+      body: JSON.stringify({ symbol, leverage, capital, orders, exchange }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Execution failed.');
@@ -1293,7 +1655,14 @@ async function executeLeveragedPlan() {
     if (data.leftoverCapital !== null && data.leftoverCapital !== undefined && data.leftoverCapital > 0.01) {
       statusEl.textContent += ` $${fmt2(data.leftoverCapital)} of capital wasn't committed to an order (rounding/precision) — still sitting in your futures balance.`;
     }
-    statusEl.className = successCount === data.results.length ? 'price-status ok' : 'price-status err';
+    // If the server had to abort the run early (see api/execute.js), the
+    // ladder is incomplete even though the request itself came back 200 —
+    // surface that plainly rather than letting it read as a normal
+    // partial-fill.
+    if (data.aborted) {
+      statusEl.textContent += ` Stopped early: ${data.abortError || 'unknown error'} — the remaining orders below were never attempted; re-run Execute to place them.`;
+    }
+    statusEl.className = successCount === data.results.length && !data.aborted ? 'price-status ok' : 'price-status err';
 
     data.results.forEach((r) => {
       const tr = document.createElement('tr');
@@ -1329,6 +1698,34 @@ async function executeSpotPlan() {
     return;
   }
 
+  // "All Funds" mode: re-check the live balance AND rebuild the plan against
+  // it right now, immediately before executing — not just at whatever point
+  // Calculate was last clicked. Without this, "All Funds" would silently
+  // mean "whatever was free back then", which could be meaningfully stale if
+  // time passed (or the balance moved) between Calculate and Execute — the
+  // same staleness problem the last ladder row already had to be fixed for
+  // server-side (see api/spot/[action].js's isLastOrder handling), just one
+  // level up. If the fresh balance can't be read or no longer produces a
+  // valid plan (e.g. it's now $0), abort here with a clear message instead
+  // of silently executing against the old, now-stale lastPlan.
+  if (capitalMode === 'all') {
+    await fetchSpotBalance();
+    const freshCapital = parseFloat(el('capital').value);
+    try {
+      lastPlan = computeSpotPlan({
+        entry: parseFloat(el('entry').value),
+        capital: freshCapital,
+        numBuys: parseInt(el('numBuys').value, 10),
+        targetDrawdownPct: parseFloat(el('targetDrawdown').value),
+        sweetSpotDrawdownPct: peakDrawdownAbsolutePct(),
+      });
+    } catch (err) {
+      statusEl.textContent = `Could not re-plan against your current balance: ${err.message}`;
+      statusEl.className = 'price-status err';
+      return;
+    }
+  }
+
   // computeSpotPlan's rows are all buys — no "Add Margin" rows to filter out.
   const orders = lastPlan.rows.map((r) => ({ step: r.step, price: r.price, qty: r.newQty, market: r.step === 1 }));
 
@@ -1337,8 +1734,8 @@ async function executeSpotPlan() {
 
   const limitCount = orders.filter((o) => !o.market).length;
   const confirmMsg = demoMode
-    ? `Simulate 1 market buy + ${limitCount} limit buy orders for ${symbol} on MEXC Spot? This is a demo — no real funds or account involved.`
-    : `Place 1 market buy + ${limitCount} limit buy orders on MEXC Spot for ${symbol}? This uses real funds — no leverage, spends your capital directly.`;
+    ? `Simulate 1 market buy + ${limitCount} limit buy orders for ${symbol} on ${EXCHANGE_LABEL[exchange]} Spot? This is a demo — no real funds or account involved.`
+    : `Place 1 market buy + ${limitCount} limit buy orders on ${EXCHANGE_LABEL[exchange]} Spot for ${symbol}? This uses real funds — no leverage, spends your capital directly.`;
   const ok = confirm(confirmMsg);
   if (!ok) return;
 
@@ -1393,7 +1790,7 @@ async function executeSpotPlan() {
     const res = await fetch('/api/spot/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbol, capital, orders }),
+      body: JSON.stringify({ symbol, capital, orders, exchange }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Execution failed.');
@@ -1403,7 +1800,14 @@ async function executeSpotPlan() {
     if (data.leftoverCapital !== null && data.leftoverCapital !== undefined && data.leftoverCapital > 0.01) {
       statusEl.textContent += ` $${fmt2(data.leftoverCapital)} of capital wasn't committed to an order (rounding/precision) — still sitting in your Spot USDT balance.`;
     }
-    statusEl.className = successCount === data.results.length ? 'price-status ok' : 'price-status err';
+    // If the server had to abort the run early (see api/spot/[action].js's
+    // handleExecute), the ladder is incomplete even though the request
+    // itself came back 200 — surface that plainly rather than letting it
+    // read as a normal partial-fill.
+    if (data.aborted) {
+      statusEl.textContent += ` Stopped early: ${data.abortError || 'unknown error'} — the remaining orders below were never attempted; re-run Execute to place them.`;
+    }
+    statusEl.className = successCount === data.results.length && !data.aborted ? 'price-status ok' : 'price-status err';
 
     data.results.forEach((r) => {
       const tr = document.createElement('tr');
@@ -1435,7 +1839,8 @@ el('resetBtn').addEventListener('click', async () => {
   el('capital').value = '951';
   el('leverage').value = '5';
   el('mmr').value = '1';
-  el('spotPeak').value = '35';
+  el('peakDrawdown').value = '50';
+  el('peakSlider').value = '50';
   el('priceStatus').textContent = '';
   el('balanceStatus').textContent = '';
   el('errorBox').style.display = 'none';
@@ -1444,20 +1849,29 @@ el('resetBtn').addEventListener('click', async () => {
   el('execTable').style.display = 'none';
   el('planResults').style.display = 'none';
   lastPlan = null;
+  updatePeakFeasibility();
   await Promise.all([fetchLivePrice(), fetchLiveBalance()]);
   el('calcBtn').click();
   checkPositionStatus();
 });
 
 // On load: show the static defaults immediately, then figure out whether
-// this deployment is running in demo mode, then pull live price + balance
-// (real or simulated) and recalculate, then check position status.
+// this deployment is running in demo mode, then check both tabs for an
+// existing position and land on whichever one actually has one open (see
+// selectInitialTabByPosition's header comment) — if neither does, fall
+// through to the normal default-Spot load flow: pull live price + balance
+// (real or simulated), recalculate, then check position status.
+applyModeCopy();
+updatePeakFeasibility();
 el('calcBtn').click();
 (async () => {
   await initDemoMode();
-  await Promise.all([fetchLivePrice(), fetchLiveBalance()]);
-  el('calcBtn').click();
-  checkPositionStatus();
+  const switchedTab = await selectInitialTabByPosition();
+  if (!switchedTab) {
+    await Promise.all([fetchLivePrice(), fetchLiveBalance()]);
+    el('calcBtn').click();
+    checkPositionStatus();
+  }
 })();
 </script>
 </body>

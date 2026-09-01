@@ -2,53 +2,47 @@
 //
 // Liquidation Price = Avg Entry - (Margin - Maintenance Margin) / Quantity
 // Maintenance Margin = Avg Entry x Quantity x MMR
-// (MEXC isolated-margin formula; fees/funding ignored.)
+// (isolated-margin formula; fees/funding ignored.)
 //
-// Margin = cumulative dollars ever put into the position as buy fills. Unlike
-// an earlier version of this calculator, the leftover capital ("margin" /
-// reserve below) is never itself injected into the position at any specific
-// step — it's left as genuinely uncommitted balance in the futures wallet,
-// on the assumption that MEXC's own Auto-Margin feature (enabled on the
-// position, outside this app) will draw on it and top up margin automatically
-// if/when liquidation becomes imminent, at whatever point in the ladder's
-// life that turns out to be. See api/execute.js and README.md for the
-// mechanical reasoning: a resting limit order freezes its own margin, so this
-// reserve has to stay unplaced (not tied to any order) to actually be
-// available for MEXC to pull from.
+// Full manual control, no reserve: every dollar of `capital` is committed
+// directly as margin across the ladder's buys — nothing is deliberately held
+// back as an untouched reserve for Bybit's Auto-Margin Replenishment (AMR)
+// feature to draw on later. (An earlier version of this calculator solved
+// for a scale factor that left part of `capital` uncommitted on purpose,
+// sized so that if/when AMR pulled all of it in, liquidation would land
+// exactly on a chosen target drawdown. That baked in an assumption — AMR
+// will always be there and always have time to act before liquidation — this
+// version doesn't make. What you enter as capital is what actually goes to
+// work, full stop, same principle the Spot tab already uses.) You can still
+// enable Bybit's AMR on the resulting position from the Bybit app as a
+// general safety net if you want one; this calculator just doesn't design
+// around it or assume it.
 //
-// Design: N buys spaced evenly in drawdown from 0% to (N-1)/N * targetDrawdown,
-// leaving one spacing-unit of buffer before the liquidation target — same
-// spacing scheme as before. Dollar size per buy is no longer monotonically
-// increasing: it grows geometrically (ratio r) up to the buy nearest
-// SWEET_SPOT_DRAWDOWN_PCT — the drawdown this plan wants to buy the most at —
-// then shrinks geometrically (ratio 1/r) beyond it. That means early buys are
-// small (price hasn't fallen far enough to be attractive yet), the buy(s)
-// right around the sweet spot are the biggest, and buys beyond it taper back
-// down (still adding to the position and still needed to keep lowering avg
-// entry, but no longer sized as the highest-conviction rungs). Because every
-// rung is smaller than the old monotonic-growth shape would have made it, the
-// naive per-rung liquidation price (computed from buy margin only, ignoring
-// the untouched reserve) frequently sits worse than the next buy's trigger
-// price — by design, this plan is relying on MEXC's Auto-Margin to bridge
-// that gap rather than self-funding every rung's full safety margin the way
-// the old shape did. Each row flags this (`autoMarginNeeded`) so it's visible
-// rather than hidden.
-//
-// Still solved in closed form for the scale factor that lands the
-// *protected* liquidation price (i.e. once the full reserve is counted, which
-// is what happens if/when MEXC's Auto-Margin has drawn all of it in) exactly
-// on the requested target drawdown — this is still the one true anchor input,
-// capped below 100%.
+// Design: N buys spaced evenly in drawdown from 0% to (N-1)/N * targetDrawdown
+// (targetDrawdown now controls purely how far down the ladder's price rungs
+// reach — same role it plays on the Spot tab — not a liquidation target to
+// solve for). Dollar size per buy grows geometrically (ratio r) up to the
+// buy nearest `sweetSpotDrawdownPct` — the drawdown you want this plan to buy
+// the most at, adjustable per-call — then shrinks geometrically (ratio 1/r)
+// beyond it: early buys are small (price hasn't fallen far enough to be
+// attractive yet), the buy(s) right around the sweet spot are the biggest,
+// and buys beyond it taper back down. Liquidation price (per row and at the
+// end of the ladder) is a plain, real, informational read-out computed
+// purely from margin actually committed by the buys placed so far — never a
+// solved-for target, never assuming any reserve gets tapped, because there
+// isn't one.
 
 const GROWTH_RATIO = 1.26;
-const SWEET_SPOT_DRAWDOWN_PCT = 35; // default peak location; smaller before and after — overridable per-call via buildLadderShape's/computeSpotPlan's sweetSpotDrawdownPct param
+const SWEET_SPOT_DRAWDOWN_PCT = 35; // default peak location; smaller before and after — overridable per-call via buildLadderShape's/computePlan's/computeSpotPlan's sweetSpotDrawdownPct param
 
 // Shared by computePlan (leveraged) and computeSpotPlan (spot): both use the
 // exact same N-buys-spaced-evenly-in-drawdown ladder, with the same
 // sweet-spot-peaked weight shape, so their trigger prices *and* relative buy
 // sizes land on identical points for the same inputs — that's what makes them
 // directly comparable. Only what happens with the capital at each of those
-// triggers (margin + leverage vs. plain spend) differs between the two.
+// triggers (leverage applied to quantity vs. plain 1x spend) differs between
+// the two — both now commit 100% of capital directly, no reserve held back
+// on either tab.
 // Note: this does NOT validate `entry` itself — each caller checks that
 // (with its own appropriately-worded message, since computePlan's mentions
 // leverage/capital and computeSpotPlan's doesn't) before calling in, so
@@ -86,35 +80,21 @@ function buildLadderShape({ entry, numBuys, targetDrawdownPct, sweetSpotDrawdown
   return { N, T, weights, peakIdx, drawdowns, prices, K1 };
 }
 
-function computePlan({ entry, leverage, mmr, capital, numBuys, targetDrawdownPct }) {
+function computePlan({ entry, leverage, mmr, capital, numBuys, targetDrawdownPct, sweetSpotDrawdownPct }) {
   if (entry <= 0 || leverage <= 0 || capital <= 0) throw new Error('Entry price, leverage and capital must be positive.');
-  const { N, T, weights, peakIdx, drawdowns, prices, K1 } = buildLadderShape({ entry, numBuys, targetDrawdownPct });
+  const { N, weights, peakIdx, drawdowns, prices, K1 } = buildLadderShape({ entry, numBuys, targetDrawdownPct, sweetSpotDrawdownPct });
 
-  let K2 = 0;
-  for (let i = 0; i < N; i++) K2 += weights[i] / prices[i];
-
-  const targetLiq = entry * (1 - T);
-  const denom = leverage * (K1 * (1 + mmr) - K2 * targetLiq);
-  if (denom <= 0) {
-    throw new Error('This combination of leverage / MMR / number of buys cannot reach that drawdown target — try fewer buys, lower leverage, or a shallower target.');
-  }
-  const E1 = capital / denom;
-
+  // No liquidation target to solve for — E1 just has to make the buys sum to
+  // the full capital (weight-shaped, same sweet-spot-peaked shape as the
+  // Spot tab). Leverage is applied per-row below, to quantity only.
+  const E1 = capital / K1;
   const buyAmounts = weights.map((w) => E1 * w);
   const totalBuys = buyAmounts.reduce((a, b) => a + b, 0);
-  // Reserve — capital minus what's actually placed into buy orders. Never
-  // actively added anywhere by this app; left as available futures balance
-  // for MEXC's Auto-Margin to draw on if/when needed. See header comment.
-  const margin = capital - totalBuys;
-
-  if (margin < 0) {
-    throw new Error('Computed margin is negative — this target/leverage/N combination is infeasible on this budget.');
-  }
 
   const rows = [];
   let cumQty = 0;
   let avgEntry = null;
-  let cumMargin = 0; // buys only — the reserve is never counted here, since nothing has actually committed it yet
+  let cumMargin = 0;
 
   for (let i = 0; i < N; i++) {
     const amt = buyAmounts[i];
@@ -124,8 +104,9 @@ function computePlan({ entry, leverage, mmr, capital, numBuys, targetDrawdownPct
     avgEntry = avgEntry === null ? price : (avgEntry * cumQty + price * qty) / newCumQty;
     cumQty = newCumQty;
     cumMargin += amt;
-    // Naive: assumes none of the reserve has been drawn in by MEXC yet — the
-    // real, immediate liquidation price at the moment this buy fills.
+    // Real, informational liquidation price at the moment this buy fills —
+    // computed purely from margin actually committed so far. No reserve, no
+    // AMR assumption baked in anywhere.
     const liq = avgEntry * (1 + mmr) - cumMargin / cumQty;
     rows.push({
       step: i + 1,
@@ -141,42 +122,28 @@ function computePlan({ entry, leverage, mmr, capital, numBuys, targetDrawdownPct
     });
   }
 
-  // Per rung, flag whether this buy's own margin alone would carry the
-  // position to the *next* buy's trigger price, or whether — because this
-  // shape intentionally doesn't over-fund every rung — MEXC's Auto-Margin
-  // would need to draw on the untouched reserve to bridge the gap first.
-  for (let i = 0; i < N - 1; i++) {
-    rows[i].autoMarginNeeded = rows[i].liq > rows[i + 1].price;
-  }
-  // After the last buy: whether reaching the protected target still requires
-  // tapping the reserve at all (true whenever margin > 0, i.e. essentially
-  // always — the reserve exists precisely to cover this last stretch).
-  rows[N - 1].autoMarginNeeded = margin > 0 && rows[N - 1].liq > targetLiq;
-
   const last = rows[rows.length - 1];
   return {
     rows,
     totalBuys,
-    margin,
-    totalDeployed: totalBuys + margin,
+    totalDeployed: totalBuys, // always equals capital now — nothing withheld
     finalQty: last.cumQty,
     finalAvgEntry: last.avgEntry,
-    naiveFinalLiq: last.liq, // real liquidation price if the reserve is never tapped
-    protectedFinalLiq: targetLiq, // solved-for target — what the reserve, once drawn in, guarantees
-    drawdownCovered: T,
+    finalLiq: last.liq, // real liquidation price once every buy has filled — informational only, not a solved-for target
+    ladderDepth: drawdowns[drawdowns.length - 1], // how far the ladder actually reaches, as a fraction
     peakIdx,
   };
 }
 
 // Spot DCA ladder — same trigger prices as computePlan (same buildLadderShape
-// call, same N/targetDrawdownPct/entry), but no leverage, no margin buffer,
-// no liquidation: every dollar of capital goes straight into buying the asset
-// at its ladder price, full stop. Unlike the leveraged tab, the Spot tab lets
-// the caller override where the buy-size peak sits via sweetSpotDrawdownPct
-// (falls back to the shared SWEET_SPOT_DRAWDOWN_PCT default when omitted, so
-// the two tabs still land on identical shapes for identical inputs by
-// default) — the only other thing that differs is what happens to the
-// capital at each trigger.
+// call, same N/targetDrawdownPct/entry), but no leverage, no liquidation:
+// every dollar of capital goes straight into buying the asset at its ladder
+// price, full stop. Both tabs let the caller override where the buy-size
+// peak sits via sweetSpotDrawdownPct (falls back to the shared
+// SWEET_SPOT_DRAWDOWN_PCT default when omitted, so the two tabs still land
+// on identical shapes for identical inputs by default) — the only thing that
+// differs between the two is what happens to the capital at each trigger
+// (leverage applied to quantity vs. plain 1x spend).
 function computeSpotPlan({ entry, capital, numBuys, targetDrawdownPct, sweetSpotDrawdownPct }) {
   if (entry <= 0 || capital <= 0) throw new Error('Entry price and capital must be positive.');
   const { N, weights, peakIdx, drawdowns, prices, K1 } = buildLadderShape({ entry, numBuys, targetDrawdownPct, sweetSpotDrawdownPct });
@@ -227,6 +194,88 @@ function computeSpotPlan({ entry, capital, numBuys, targetDrawdownPct, sweetSpot
   };
 }
 
+// Leveraged-only: does a computed ladder actually survive to fill every row,
+// or does it get liquidated partway down before a later buy ever triggers?
+//
+// Because computePlan now commits 100% of capital as margin at a fixed
+// leverage (no reserve — see computePlan's header comment), there's a clean
+// closed-form identity buried in its liq formula: every row's margin equals
+// that row's own notional ÷ leverage (amt_i = price_i * qty_i / leverage,
+// straight from qty_i = amt_i * leverage / price_i), so cumMargin/cumQty
+// collapses to exactly avgEntry/leverage — regardless of how the ladder's
+// weights are shaped. That makes every row's liquidation price exactly
+//   avgEntry * (1 + mmr - 1/leverage)
+// i.e. a FIXED percentage below whatever the CURRENT average entry happens
+// to be, at every single row. Peak buy drawdown doesn't change that
+// percentage at all — what it changes is how fast avgEntry itself falls to
+// keep pace with the falling price, which is what determines whether the
+// ladder can actually reach deeper rows before that fixed cushion runs out.
+//
+// This checks exactly that: walking the rows in order, does each row's own
+// liq stay below the NEXT row's trigger price (so that next buy can actually
+// fill before liquidation)? The first failure marks how deep the ladder
+// really reaches versus how deep it was asked to reach.
+function ladderSurvival(plan) {
+  const rows = plan.rows;
+  for (let i = 0; i < rows.length - 1; i++) {
+    if (rows[i].liq >= rows[i + 1].price) {
+      return { survivesFully: false, failedAtStep: rows[i + 1].step, survivedDrawdownPct: rows[i].drawdown * 100 };
+    }
+  }
+  const last = rows[rows.length - 1];
+  return { survivesFully: true, failedAtStep: null, survivedDrawdownPct: last.drawdown * 100 };
+}
+
+// Scans every achievable Peak buy drawdown value (1%-99%, 1% steps) for a
+// given leverage / MMR / numBuys / targetDrawdownPct "shape" and reports
+// whether each one lets the resulting ladder fully survive to its last row.
+// Entry price and capital never affect the answer — ladderSurvival's
+// liq/avgEntry comparison reduces entirely to price RATIOS relative to the
+// first buy (both leg's absolute scale cancels out), so this always uses
+// fixed placeholder values for them. That also means callers don't need the
+// user's real entry/capital fields, which may be blank/invalid mid-edit —
+// only the four "shape" inputs matter here.
+function scanPeakFeasibility({ leverage, mmr, numBuys, targetDrawdownPct }) {
+  const results = [];
+  for (let peak = 1; peak <= 99; peak++) {
+    try {
+      const plan = computePlan({ entry: 100, leverage, mmr, capital: 1000, numBuys, targetDrawdownPct, sweetSpotDrawdownPct: peak });
+      const surv = ladderSurvival(plan);
+      results.push({ peak, survivesFully: surv.survivesFully, survivedDrawdownPct: surv.survivedDrawdownPct });
+    } catch (e) {
+      results.push({ peak, survivesFully: false, survivedDrawdownPct: 0 });
+    }
+  }
+  return results;
+}
+
+// Same idea as scanPeakFeasibility, but samples Peak buy drawdown as a
+// PERCENTAGE OF THE TARGET DRAWDOWN (1%-100%, 1% steps) instead of an
+// absolute drawdown-from-entry percentage. This is what the UI's Peak buy
+// drawdown slider actually drives: "the weight sits at -50% drawdown" is
+// meaningless (and used to silently just clamp to the ladder's last row)
+// once Target Drawdown is set shallower than that — e.g. a 40% target
+// ladder never reaches -50% at all — but "the weight sits 50% of the way
+// down the ladder's own depth" is always well-defined no matter what the
+// target is set to. Each sample's absolute equivalent
+// (peakPct/100 * targetDrawdownPct) is what's actually passed through to
+// computePlan/ladderSurvival — this is purely a re-parameterization of the
+// same survival model in scanPeakFeasibility, not a different one.
+function scanPeakFeasibilityRelative({ leverage, mmr, numBuys, targetDrawdownPct }) {
+  const results = [];
+  for (let peakPct = 1; peakPct <= 100; peakPct++) {
+    const absolutePeakPct = (peakPct / 100) * targetDrawdownPct;
+    try {
+      const plan = computePlan({ entry: 100, leverage, mmr, capital: 1000, numBuys, targetDrawdownPct, sweetSpotDrawdownPct: absolutePeakPct });
+      const surv = ladderSurvival(plan);
+      results.push({ peakPct, absolutePeakPct, survivesFully: surv.survivesFully, survivedDrawdownPct: surv.survivedDrawdownPct });
+    } catch (e) {
+      results.push({ peakPct, absolutePeakPct, survivesFully: false, survivedDrawdownPct: 0 });
+    }
+  }
+  return results;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { computePlan, computeSpotPlan, GROWTH_RATIO, SWEET_SPOT_DRAWDOWN_PCT };
+  module.exports = { computePlan, computeSpotPlan, GROWTH_RATIO, SWEET_SPOT_DRAWDOWN_PCT, ladderSurvival, scanPeakFeasibility, scanPeakFeasibilityRelative };
 }
