@@ -9,7 +9,40 @@
 //
 // Both are public endpoints, no auth needed.
 const { bybitPublicGet } = require('../bybitClient.js');
-const { getFuturesTicker } = require('../mexcClient.js');
+const { getFuturesTicker, getFuturesKline } = require('../mexcClient.js');
+
+// Read-only 4h candlestick data for the Position Status chart -- fixed
+// interval, no other timeframe exposed anywhere in the UI (see index.html's
+// renderStatusChart). Public endpoint, no auth, same "proxy through our own
+// API to dodge browser CORS" reasoning as the ticker branch below. Kline
+// data is intentionally NOT cached/deduped across requests -- the chart
+// only re-fetches on the same cadence as the rest of Position Status
+// (page load / Refresh status / after Execute), which is infrequent enough
+// that a plain per-request fetch is fine.
+async function handleKline(req, res, symbol, exchange) {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 150, 10), 500);
+  try {
+    if (exchange === 'mexc') {
+      const candles = await getFuturesKline(symbol, limit);
+      res.status(200).json({ candles });
+      return;
+    }
+
+    const data = await bybitPublicGet('/v5/market/kline', { category: 'linear', symbol, interval: '240', limit });
+    if (!data || data.retCode !== 0 || !Array.isArray(data.result?.list)) {
+      res.status(502).json({ error: data?.retMsg ? `Bybit: ${data.retMsg}` : 'Could not fetch candles from Bybit linear.' });
+      return;
+    }
+    // Bybit returns newest-first -- reverse to ascending time, which is
+    // what the charting library on the client expects.
+    const candles = data.result.list
+      .map((c) => ({ time: Math.floor(Number(c[0]) / 1000), open: Number(c[1]), high: Number(c[2]), low: Number(c[3]), close: Number(c[4]) }))
+      .reverse();
+    res.status(200).json({ candles });
+  } catch (err) {
+    res.status(502).json({ error: `Failed to reach ${exchange === 'mexc' ? 'MEXC' : 'Bybit'} for candle data.`, detail: String(err.message || err) });
+  }
+}
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -18,6 +51,11 @@ module.exports = async (req, res) => {
   const exchange = String(req.query.exchange || 'bybit').toLowerCase();
   if (!symbol) {
     res.status(400).json({ error: 'symbol query param is required, e.g. ?symbol=CRVUSDT' });
+    return;
+  }
+
+  if (req.query.kline === '1') {
+    await handleKline(req, res, String(symbol).toUpperCase(), exchange);
     return;
   }
 

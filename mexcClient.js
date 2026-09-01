@@ -37,6 +37,7 @@ const crypto = require('crypto');
 const FUTURES_PRIVATE_BASE_URL = 'https://api.mexc.com';
 const FUTURES_CONTRACT_DETAIL_URL = 'https://contract.mexc.com/api/v1/contract/detail';
 const FUTURES_TICKER_URL = 'https://contract.mexc.com/api/v1/contract/ticker';
+const FUTURES_KLINE_URL = 'https://contract.mexc.com/api/v1/contract/kline';
 const SPOT_BASE_URL = 'https://api.mexc.com';
 const SPOT_RECV_WINDOW = 10000;
 // A few minutes shy of the true 7-day boundary, not exactly 7 days: MEXC
@@ -111,6 +112,29 @@ async function getFuturesTicker(symbol) {
   return data.data;
 }
 
+// Public candlestick data for the read-only Position Status chart (no auth
+// needed). MEXC Futures returns PARALLEL arrays (time[]/open[]/high[]/...)
+// rather than an array of per-candle rows the way Bybit and MEXC Spot both
+// do -- normalized here into the same {time, open, high, low, close} shape
+// (time in unix SECONDS, ascending) both api/price.js and
+// api/spot/[action].js's kline action expect, so neither has to know MEXC
+// Futures' response shape is different at all.
+async function getFuturesKline(symbol, limit) {
+  const res = await fetch(`${FUTURES_KLINE_URL}/${encodeURIComponent(symbol)}?interval=Hour4`);
+  const data = await res.json();
+  if (!data || data.success !== true || !data.data || !Array.isArray(data.data.time)) {
+    throw new Error(data?.message || `No candle data found for "${symbol}" on MEXC futures.`);
+  }
+  const { time, open, high, low, close } = data.data;
+  const candles = time.map((t, i) => ({
+    time: Math.floor(Number(t)),
+    open: Number(open[i]),
+    high: Number(high[i]),
+    low: Number(low[i]),
+    close: Number(close[i]),
+  }));
+  return limit ? candles.slice(-limit) : candles;
+}
 
 const JSON_CONTENT_TYPE_HEADER = { 'Content-Type': 'application/json' };
 
@@ -149,6 +173,25 @@ async function getSpotTicker(symbol) {
   return res.json();
 }
 
+// Public candlestick data for MEXC Spot -- same normalized shape as
+// getFuturesKline above. MEXC Spot returns an array-of-arrays like Bybit
+// does (unlike Futures' parallel-array shape), but with a different column
+// layout: [openTime, open, high, low, close, volume, closeTime, ...].
+async function getSpotKline(symbol, limit) {
+  const qs = `symbol=${encodeURIComponent(symbol)}&interval=Hour4&limit=${limit || 150}`;
+  const res = await fetch(`${SPOT_BASE_URL}/api/v3/klines?${qs}`);
+  const data = await res.json();
+  if (!Array.isArray(data)) {
+    throw new Error(data?.msg || `No candle data found for "${symbol}" on MEXC spot.`);
+  }
+  return data.map((c) => ({
+    time: Math.floor(Number(c[0]) / 1000),
+    open: Number(c[1]),
+    high: Number(c[2]),
+    low: Number(c[3]),
+    close: Number(c[4]),
+  }));
+}
 
 // MEXC's spot v3 docs don't document a stepSize/tickSize filter the way
 // Binance's does — precision comes from flat baseAssetPrecision/
@@ -197,12 +240,14 @@ module.exports = {
   futuresErrMsg,
   getFuturesContractDetail,
   getFuturesTicker,
+  getFuturesKline,
   // Spot
   spotPrivateGet,
   spotPrivatePost,
   spotPrivateDelete,
   getSpotTicker,
   getSpotSymbolPrecision,
+  getSpotKline,
   SPOT_SEVEN_DAYS_MS,
   // Shared
   makeAppOrderTag,

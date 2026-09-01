@@ -29,6 +29,7 @@ const {
   spotPrivateDelete,
   getSpotTicker,
   getSpotSymbolPrecision,
+  getSpotKline,
   SPOT_SEVEN_DAYS_MS,
   makeAppOrderTag,
   isAppOrderTag,
@@ -79,6 +80,40 @@ async function handlePrice(req, res, exchange) {
     res.status(200).json({ symbol: ticker.symbol, lastPrice: ticker.lastPrice });
   } catch (err) {
     res.status(502).json({ error: 'Failed to reach Bybit.', detail: String(err) });
+  }
+}
+
+// =====================================================================
+// ---- kline ----------------------------------------------------------
+// GET /api/spot/kline?symbol=CRVUSDT&exchange=bybit|mexc&limit=150
+// Read-only 4h candlestick data for the Position Status chart -- Spot's
+// counterpart to api/price.js's handleKline (Leveraged), same fixed
+// interval/no-auth/no-caching reasoning, see that file's header comment.
+// Public endpoint, no auth needed on either exchange, so this is
+// deliberately dispatched BEFORE the API-key check below (same as the
+// existing `price` action) rather than after it.
+// =====================================================================
+async function handleKline(req, res, symbol, exchange) {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 150, 10), 500);
+  try {
+    if (exchange === 'mexc') {
+      const candles = await getSpotKline(symbol, limit);
+      res.status(200).json({ candles });
+      return;
+    }
+
+    const data = await bybitPublicGet('/v5/market/kline', { category: 'spot', symbol, interval: '240', limit });
+    if (!data || data.retCode !== 0 || !Array.isArray(data.result?.list)) {
+      res.status(502).json({ error: data?.retMsg ? `Bybit: ${data.retMsg}` : 'Could not fetch candles from Bybit spot.' });
+      return;
+    }
+    // Bybit returns newest-first -- reverse to ascending time.
+    const candles = data.result.list
+      .map((c) => ({ time: Math.floor(Number(c[0]) / 1000), open: Number(c[1]), high: Number(c[2]), low: Number(c[3]), close: Number(c[4]) }))
+      .reverse();
+    res.status(200).json({ candles });
+  } catch (err) {
+    res.status(502).json({ error: `Failed to reach ${exchange === 'mexc' ? 'MEXC' : 'Bybit'} for candle data.`, detail: String(err.message || err) });
   }
 }
 
@@ -739,6 +774,16 @@ module.exports = async (req, res) => {
 
   if (action === 'price') {
     await handlePrice(req, res, exchange);
+    return;
+  }
+
+  if (action === 'kline') {
+    const { symbol } = req.query;
+    if (!symbol) {
+      res.status(400).json({ error: 'symbol query param is required, e.g. ?symbol=CRVUSDT' });
+      return;
+    }
+    await handleKline(req, res, String(symbol).toUpperCase(), exchange);
     return;
   }
 

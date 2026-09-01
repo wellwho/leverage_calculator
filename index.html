@@ -376,7 +376,32 @@
         </table>
       </div>
       <div class="note">
-        Orders since your last Execute — not the pair's full trading history. "Filled" rows show how deep this run's ladder actually went; "Resting" ones are still on the book. "Avg entry if filled" is the running position average as if every order down to that row has triggered — a cumulative preview of where your average lands at each rung, same idea as the Ladder table's Avg entry column but built from these real orders. Canceled/invalid orders don't contribute and show "—". While a position is open, "Execute plan on MEXC" is hidden below so you don't accidentally deploy a second ladder on top of it — the Calculate button above still works for previewing numbers only.
+        Orders since your last Execute — not the pair's full trading history. "Filled" rows show how deep this run's ladder actually went; "Resting" ones are still on the book. "Avg entry if filled" is the running position average as if every order down to that row has triggered — a cumulative preview of where your average lands at each rung, same idea as the Ladder table's Avg entry column but built from these real orders. Canceled/invalid orders don't contribute and show "—". While a position is open, "Execute plan on Bybit" is hidden below so you don't accidentally deploy a second ladder on top of it — the Calculate button above still works for previewing numbers only.
+      </div>
+      <div class="feasibility-note bad" id="ordersErrorNote" style="display: none;"></div>
+      <!-- TEMPORARY DIAGNOSTIC (2026-08-24): tracking down why resting limit
+           orders that are confirmed to exist on Bybit weren't showing up in
+           this table for a real Leveraged run. Shows api/status.js's raw
+           (pre-scoping) order list next to what actually made it through the
+           "since last Execute" filter, so the mismatch (if any) is visible
+           without needing browser dev tools. Remove this block, and the
+           debug fields feeding it in api/status.js, once the cause is found. -->
+      <pre id="orderDebugBox" style="display: none; margin-top: 10px; padding: 10px; background: var(--panel2); border-radius: 6px; font-size: 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;"></pre>
+
+      <!-- Read-only 4h chart: a fixed candlestick view of this run with
+           price lines for avg entry / current price / liquidation
+           (Leveraged) / every order in the scoped list above. No zoom,
+           pan, or manual-edit controls on purpose -- it's a picture of
+           the deployed plan, not another input surface. Fetches once per
+           Position Status refresh (page load / "Refresh status" / after
+           Execute), same cadence as the rest of this card -- no
+           streaming/websocket. See renderStatusChart() below. -->
+      <div id="statusChartWrap" style="display: none; margin-top: 16px;">
+        <div class="note" style="margin-bottom: 8px;">
+          4h candles, last ~10 days -- read-only, no zoom or edit controls. Solid green lines are filled buys, dashed amber lines are still-resting limit orders, dotted gray lines are canceled/invalid orders. The vertical range is scaled to the visible candles, not to the liquidation line below, so the price action stays readable.
+        </div>
+        <div id="statusChart" style="width: 100%; height: 380px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;"></div>
+        <div class="feasibility-note bad" id="statusChartError" style="display: none; margin-top: 8px;"></div>
       </div>
     </div>
 
@@ -428,6 +453,15 @@
   <footer id="footerNote">Prices via Bybit Spot public ticker. Not financial advice.</footer>
 </div>
 
+<!-- TradingView Lightweight Charts: read-only 4h candlestick chart on
+     the Position Status card (renderStatusChart below). Loaded from a
+     CDN with no defer/async so the LightweightCharts global exists by
+     the time the inline script below runs, same as calc.js/statusCalc.js.
+     If this CDN is blocked/unreachable, the script tag just fails to
+     define window.LightweightCharts -- renderStatusChart() checks for
+     that and shows a small note instead of the chart, nothing else on
+     the page depends on it. -->
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="calc.js"></script>
 <script src="statusCalc.js"></script>
 <script>
@@ -663,6 +697,392 @@ function setMode(newMode) {
 el('tabLeveraged').addEventListener('click', () => setMode('leveraged'));
 el('tabSpot').addEventListener('click', () => setMode('spot'));
 
+// Switches which exchange the CURRENT tab talks to. `opts.skipFetch` is used
+// only by selectInitialTabByPosition below, which needs to update this
+// state + the UI labels before calling setMode() for the winning combo —
+// setMode() always does its own full price/balance/calc/status refresh at
+// the end, so doing it here too would just double the work for that one
+// caller.
+function setExchange(newExchange, opts) {
+  exchange = newExchange;
+  try {
+    localStorage.setItem('lastExchange', exchange);
+  } catch {
+    // best-effort only
+  }
+  el('exchangeBybitBtn').classList.toggle('active', exchange === 'bybit');
+  el('exchangeMexcBtn').classList.toggle('active', exchange === 'mexc');
+  applyModeCopy();
+
+  if (opts && opts.skipFetch) return;
+
+  lastPlan = null;
+  el('planResults').style.display = 'none';
+  el('errorBox').style.display = 'none';
+  el('priceStatus').textContent = '';
+  el('balanceStatus').textContent = '';
+  setCapitalMode(capitalMode);
+  updatePeakFeasibility();
+
+  Promise.all([fetchLivePrice(), fetchLiveBalance()]).then(() => {
+    el('calcBtn').click();
+    checkPositionStatus();
+  });
+}
+
+el('exchangeBybitBtn').addEventListener('click', () => setExchange('bybit'));
+el('exchangeMexcBtn').addEventListener('click', () => setExchange('mexc'));
+
+// Shared by both tabs: whether the "capital" field auto-tracks the account's
+// live free balance ('all') or is a plain manually-typed number ('custom' —
+// the default, so nobody deploys their entire balance just by opening the
+// app). In 'all' mode the field itself is disabled (there's nothing to type
+// — it's always overwritten right before use) and BOTH the Calculate and
+// Execute functions for whichever tab is active re-fetch the live balance
+// fresh immediately before using it (calculateSpotPlan/executeSpotPlan for
+// Spot USDT free balance; calculateLeveragedPlan/executeLeveragedPlan for
+// Futures available balance). That matters specifically because Execute can
+// happen a while after Calculate: without a fresh re-check right at Execute
+// time, "All Funds" would really mean "whatever was free back when I last
+// clicked Calculate or Get balance", not the true live figure — the same
+// staleness problem this app already had to solve for the last order of a
+// Spot ladder (see api/spot/[action].js's isLastOrder handling), just one
+// level up.
+let capitalMode = 'custom';
+
+function setCapitalMode(newMode) {
+  capitalMode = newMode;
+  const isAll = capitalMode === 'all';
+  el('capitalModeAllBtn').classList.toggle('active', isAll);
+  el('capitalModeCustomBtn').classList.toggle('active', !isAll);
+  el('capital').disabled = isAll;
+  el('balanceBtn').disabled = isAll;
+  const balanceLabel = mode === 'spot' ? `${EXCHANGE_LABEL[exchange]} Spot USDT balance` : `${EXCHANGE_LABEL[exchange]} Futures available balance`;
+  el('capitalModeNote').textContent = isAll
+    ? `Deploys 100% of your current ${balanceLabel} — refreshed automatically right before Calculate and right before Execute.`
+    : '';
+}
+
+el('capitalModeAllBtn').addEventListener('click', () => setCapitalMode('all'));
+el('capitalModeCustomBtn').addEventListener('click', () => setCapitalMode('custom'));
+
+// Peak buy weight slider: `peakSlider` (drag) and `peakDrawdown` (type an
+// exact number) both hold the SAME unit — a percentage OF THE TARGET
+// DRAWDOWN, not an absolute drawdown from entry (see peakDrawdownAbsolutePct's
+// header comment for why: "-50%" is meaningless, and used to silently just
+// clamp to the last row, once Target Drawdown itself is set shallower than
+// that). Dragging one updates the other's value, then both call this. On
+// the Leveraged tab, the slider's own track becomes the red/amber/green
+// feasibility bar itself (rather than a separate element alongside it), so
+// moving the handle directly shows what happens: green where this weight
+// position reaches the full target drawdown before liquidation, amber
+// where it's already the best ANY position can achieve given the current
+// leverage/buys/target (a structural shortfall, not a bad choice), red
+// where it's leaving survivability on the table. This is entirely a
+// function of leverage / MMR / number of buys / target drawdown / relative
+// peak position — never of entry price or capital (see calc.js's
+// scanPeakFeasibilityRelative comment for why those cancel out) — so it
+// recomputes instantly on every drag/keystroke, no network call, no
+// dependency on a live price/balance having loaded yet. A plain-language
+// readout of what the relative position actually means in absolute terms
+// (e.g. "50% of a -70% target = -35% drawdown") always shows, on both tabs,
+// since Spot uses this same weight positioning for its buy sizes even
+// though it has no liquidation to evaluate.
+//
+// `#peakLiqNote` (Leveraged tab only) additionally shows the exact DOLLAR
+// liquidation price this weight position implies — computePlan's
+// `finalLiq`, using the real entry price currently typed in (unlike the
+// %-drawdown feasibility math above, a dollar price genuinely needs the
+// real entry price to mean anything). Capital is still irrelevant to it —
+// avgEntry/liq are weighted-average ratios that a uniform capital scale
+// cancels out of — so an arbitrary placeholder capital is used here too,
+// same reasoning as the scan above, meaning this never has to wait on a
+// live balance fetch either. This is the plan's FINAL row's liquidation
+// price (matches the "Final liquidation ($)" stat shown after Calculate),
+// shown regardless of whether this weight actually survives that far —
+// same convention the stats box already uses.
+function updatePeakFeasibility() {
+  const slider = el('peakSlider');
+  const posNote = el('peakPositionNote');
+  const liqNote = el('peakLiqNote');
+  const note = el('feasibilityNote');
+  const peakPct = parseFloat(el('peakDrawdown').value);
+  const targetDrawdownPct = parseFloat(el('targetDrawdown').value);
+  const fillPct = Number.isFinite(peakPct) ? Math.min(100, Math.max(0, ((peakPct - 1) / 99) * 100)) : 50;
+  const neutralTrack = () => {
+    slider.style.background = `linear-gradient(to right, var(--accent) 0%, var(--accent) ${fillPct}%, var(--panel2) ${fillPct}%, var(--panel2) 100%)`;
+  };
+
+  if (!Number.isFinite(peakPct) || !Number.isFinite(targetDrawdownPct) || targetDrawdownPct <= 0 || targetDrawdownPct >= 100 || peakPct <= 0 || peakPct > 100) {
+    neutralTrack();
+    posNote.className = 'feasibility-note';
+    posNote.textContent = '';
+    liqNote.textContent = '';
+    note.className = 'feasibility-note';
+    note.textContent = '';
+    return;
+  }
+
+  const absolutePeakPct = (peakPct / 100) * targetDrawdownPct;
+  posNote.className = 'feasibility-note';
+  posNote.textContent = `${peakPct}% of the way to your -${targetDrawdownPct}% target = -${absolutePeakPct.toFixed(1)}% drawdown from entry — that's where the biggest buy sits.`;
+
+  if (mode === 'spot') {
+    neutralTrack();
+    liqNote.textContent = '';
+    note.className = 'feasibility-note';
+    note.textContent = '';
+    return;
+  }
+
+  const leverage = parseFloat(el('leverage').value);
+  const mmr = parseFloat(el('mmr').value) / 100;
+  const numBuys = parseInt(el('numBuys').value, 10);
+
+  if (![leverage, mmr, numBuys].every((v) => Number.isFinite(v)) || leverage <= 0 || numBuys < 1) {
+    neutralTrack();
+    liqNote.textContent = '';
+    note.className = 'feasibility-note';
+    note.textContent = '';
+    return;
+  }
+
+  const entryPrice = parseFloat(el('entry').value);
+  if (Number.isFinite(entryPrice) && entryPrice > 0) {
+    try {
+      const liqPlan = computePlan({ entry: entryPrice, leverage, mmr, capital: 1000, numBuys, targetDrawdownPct, sweetSpotDrawdownPct: absolutePeakPct });
+      liqNote.textContent = `Liquidation price at this weight: $${fmtPrice(liqPlan.finalLiq)}`;
+    } catch (err) {
+      liqNote.textContent = '';
+    }
+  } else {
+    liqNote.textContent = '';
+  }
+
+  let scan;
+  try {
+    scan = scanPeakFeasibilityRelative({ leverage, mmr, numBuys, targetDrawdownPct });
+  } catch (err) {
+    neutralTrack();
+    note.className = 'feasibility-note';
+    note.textContent = '';
+    return;
+  }
+
+  const maxDepth = Math.max(...scan.map((r) => r.survivedDrawdownPct));
+  const fullyAchievable = scan.some((r) => r.survivesFully);
+  const EPS = 1e-6;
+  const colorFor = (r) => (r.survivesFully ? '#48bb78' : r.survivedDrawdownPct >= maxDepth - EPS ? '#f6ad55' : '#f56565');
+
+  // Hard-edged gradient built from the 100 1%-wide relative samples — the
+  // slider's track IS the feasibility bar now, so dragging the handle
+  // across it shows the color change directly under your thumb, and the
+  // slider's own 1%-100% range lines up exactly with the scan's own.
+  const stops = [];
+  scan.forEach((r, idx) => {
+    const c = colorFor(r);
+    stops.push(`${c} ${(idx / scan.length) * 100}%`, `${c} ${((idx + 1) / scan.length) * 100}%`);
+  });
+  slider.style.background = `linear-gradient(to right, ${stops.join(', ')})`;
+
+  // Exact (unrounded) check for the user's actual typed/dragged position,
+  // rather than snapping to the nearest 1%-sampled segment.
+  let current;
+  try {
+    current = ladderSurvival(computePlan({ entry: 100, leverage, mmr, capital: 1000, numBuys, targetDrawdownPct, sweetSpotDrawdownPct: absolutePeakPct }));
+  } catch (err) {
+    current = null;
+  }
+
+  const cushionPct = (1 / leverage - mmr) * 100;
+  if (current && current.survivesFully) {
+    note.className = 'feasibility-note safe';
+    note.textContent = `Reaches the full -${targetDrawdownPct}% target drawdown before liquidation. At ${leverage}x leverage (${(mmr * 100).toFixed(2)}% MMR), every row's liquidation sits a fixed ~${cushionPct.toFixed(1)}% below the current average entry — this weight position pulls the average down fast enough to stay ahead of the falling price the whole way down.`;
+  } else if (fullyAchievable) {
+    const minFeasible = scan.find((r) => r.survivesFully);
+    note.className = 'feasibility-note warn';
+    note.textContent = `This position gets liquidated at a ${current ? current.survivedDrawdownPct.toFixed(1) : '?'}% drawdown, short of your -${targetDrawdownPct}% target. Move the slider to ${minFeasible.peakPct}% (-${minFeasible.absolutePeakPct.toFixed(1)}%) or deeper to reach the full ladder at ${leverage}x leverage.`;
+  } else {
+    const bestPeak = scan.find((r) => r.survivedDrawdownPct >= maxDepth - EPS);
+    const atBest = current && current.survivedDrawdownPct >= maxDepth - EPS;
+    note.className = 'feasibility-note bad';
+    note.textContent = atBest
+      ? `No weight position can reach the full -${targetDrawdownPct}% target at ${leverage}x leverage with ${numBuys} buys — this is already the best achievable, reaching -${maxDepth.toFixed(1)}% before liquidation. To go deeper, use more buys, lower leverage, or a shallower target drawdown.`
+      : `This position gets liquidated at -${current ? current.survivedDrawdownPct.toFixed(1) : '?'}%. Even the best possible position (${bestPeak.peakPct}%, -${bestPeak.absolutePeakPct.toFixed(1)}%, or deeper) only reaches -${maxDepth.toFixed(1)}% at ${leverage}x leverage with ${numBuys} buys — short of your -${targetDrawdownPct}% target either way, but moving there gets you as far as this setup can go.`;
+  }
+}
+
+['entry', 'leverage', 'mmr', 'numBuys', 'targetDrawdown'].forEach((id) => {
+  el(id).addEventListener('input', updatePeakFeasibility);
+});
+
+// Keep the slider (drag) and the number field (type an exact value) in sync
+// in both directions, each recomputing the feasibility indicator as it goes.
+el('peakSlider').addEventListener('input', () => {
+  el('peakDrawdown').value = el('peakSlider').value;
+  updatePeakFeasibility();
+});
+el('peakDrawdown').addEventListener('input', () => {
+  const v = parseFloat(el('peakDrawdown').value);
+  if (Number.isFinite(v)) el('peakSlider').value = Math.min(100, Math.max(1, Math.round(v)));
+  updatePeakFeasibility();
+});
+
+// Read-only 4h candlestick chart for the Position Status card -- see the
+// header comment on #statusChartWrap in the HTML above for the "why". Kept
+// entirely separate from renderPositionStatus()'s own table/summary
+// rendering (called from the end of it) so a chart-data fetch failure or a
+// blocked CDN can never affect the numbers/table above it -- this function
+// only ever touches its own #statusChartWrap/#statusChart/#statusChartError
+// elements. The chart itself is created once and reused across refreshes
+// (setData() + re-adding price lines) rather than destroyed/rebuilt every
+// time, which avoids a visible flicker on every "Refresh status" click.
+let statusChart = null;
+let statusChartSeries = null;
+let statusChartPriceLines = [];
+let statusChartCandles = [];
+// 10 days of 4h candles -- was 200 (~33 days), which made the chart dense
+// and, combined with the old default autoscale, compressed the interesting
+// recent price action into a sliver at the top. Purely a display choice;
+// the order list itself is still scoped server-side to "since last
+// Execute", independent of how many days of candles are shown here.
+const CHART_CANDLE_LIMIT = 60;
+
+async function renderStatusChart(data) {
+  const wrap = el('statusChartWrap');
+  const container = el('statusChart');
+  const errEl = el('statusChartError');
+  if (!wrap || !container || !errEl) return; // defensive -- markup missing for some reason
+
+  if (!data.hasPosition || !data.position) {
+    wrap.style.display = 'none';
+    return;
+  }
+
+  wrap.style.display = '';
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+
+  if (typeof LightweightCharts === 'undefined') {
+    container.style.display = 'none';
+    errEl.style.display = '';
+    errEl.textContent = 'Chart library failed to load (CDN blocked or unreachable) -- the rest of Position Status above is unaffected.';
+    return;
+  }
+
+  const symbolRaw = el('symbol').value;
+  const symbol = mode === 'leveraged' ? toFuturesSymbol(symbolRaw) : toSpotSymbol(symbolRaw);
+  const klineUrl = mode === 'leveraged'
+    ? `/api/price?symbol=${encodeURIComponent(symbol)}&exchange=${exchange}&kline=1&limit=${CHART_CANDLE_LIMIT}`
+    : `/api/spot/kline?symbol=${encodeURIComponent(symbol)}&exchange=${exchange}&limit=${CHART_CANDLE_LIMIT}`;
+
+  let candles;
+  try {
+    const res = await fetch(klineUrl);
+    const json = await res.json();
+    if (!res.ok || !Array.isArray(json.candles)) throw new Error(json.error || 'No candle data returned.');
+    candles = json.candles;
+  } catch (err) {
+    container.style.display = 'none';
+    errEl.style.display = '';
+    errEl.textContent = `Chart data fetch failed: ${err.message || err} -- the rest of Position Status above is unaffected.`;
+    return;
+  }
+
+  if (!candles.length) {
+    container.style.display = 'none';
+    errEl.style.display = '';
+    errEl.textContent = 'No candle data available for this symbol yet.';
+    return;
+  }
+
+  container.style.display = '';
+
+  if (!statusChart) {
+    statusChart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: 380,
+      layout: { background: { color: '#131922' }, textColor: '#e6edf3' },
+      grid: { vertLines: { color: '#1a2230' }, horzLines: { color: '#1a2230' } },
+      rightPriceScale: { borderColor: '#243044' },
+      timeScale: { borderColor: '#243044', timeVisible: true, secondsVisible: false },
+      // Fixed/read-only, per the design brief -- no pan, no zoom, no
+      // scroll-wheel price-scale drag. Hovering the crosshair to read an
+      // OHLC value still works (LightweightCharts' default), that's
+      // inspection, not editing.
+      handleScroll: false,
+      handleScale: false,
+    });
+    statusChartSeries = statusChart.addCandlestickSeries({
+      upColor: '#48bb78',
+      downColor: '#f56565',
+      borderUpColor: '#48bb78',
+      borderDownColor: '#f56565',
+      wickUpColor: '#48bb78',
+      wickDownColor: '#f56565',
+      // Default autoscale would stretch the visible range to fit every
+      // price LINE too (avg entry / current / liq / each order), not just
+      // the candles -- that's what was dragging the whole chart down to
+      // the liquidation price, which can sit 40-50% below anything actually
+      // relevant. This overrides it to fit the candle data only (their real
+      // high/low, +8% padding), reading statusChartCandles through closure
+      // so it always reflects whatever was most recently fetched, not a
+      // stale snapshot from when the series was first created.
+      autoscaleInfoProvider: () => {
+        if (!statusChartCandles.length) return null;
+        let min = Infinity;
+        let max = -Infinity;
+        statusChartCandles.forEach((c) => {
+          if (c.low < min) min = c.low;
+          if (c.high > max) max = c.high;
+        });
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+        const pad = (max - min) * 0.08 || max * 0.02 || 1;
+        return { priceRange: { minValue: min - pad, maxValue: max + pad } };
+      },
+    });
+    window.addEventListener('resize', () => {
+      if (statusChart && container.clientWidth) statusChart.applyOptions({ width: container.clientWidth });
+    });
+  }
+
+  statusChartCandles = candles;
+  statusChartSeries.setData(candles);
+
+  // Price lines aren't part of setData() -- clear last render's lines
+  // before drawing this run's, or they'd accumulate across refreshes.
+  statusChartPriceLines.forEach((pl) => statusChartSeries.removePriceLine(pl));
+  const newLines = [];
+  const addLine = (price, color, style, width, title, axisLabelVisible) => {
+    if (!Number.isFinite(price) || price <= 0) return;
+    newLines.push(statusChartSeries.createPriceLine({ price, color, lineWidth: width, lineStyle: style, axisLabelVisible, title }));
+  };
+
+  const p = data.position;
+  addLine(Number(p.holdAvgPrice), '#4fd1c5', LightweightCharts.LineStyle.Solid, 2, 'Avg entry', true);
+  if (data.pnl) addLine(Number(data.pnl.currentPrice), '#e6edf3', LightweightCharts.LineStyle.Dashed, 1, 'Current', true);
+  if (data.projectedLiquidation !== null && data.projectedLiquidation !== undefined) {
+    addLine(Number(data.projectedLiquidation), '#f56565', LightweightCharts.LineStyle.Dashed, 2, 'Liq (proj)', true);
+  }
+
+  // Same three-way split as renderPositionStatus()'s own table: filled
+  // (solid green), still-resting/pending (dashed amber), canceled/invalid
+  // (dotted gray, shown for context same as the table's "--" rows -- these
+  // never fill, but seeing where they WERE explains gaps in the ladder).
+  (data.orders || []).forEach((o) => {
+    if (o.state === 3) {
+      addLine(Number(o.dealAvgPrice) || Number(o.price), '#48bb78', LightweightCharts.LineStyle.Solid, 1, 'Filled', false);
+    } else if (o.state === 1 || o.state === 2) {
+      addLine(Number(o.price), '#f6ad55', LightweightCharts.LineStyle.Dashed, 1, 'Resting', false);
+    } else {
+      addLine(Number(o.price), '#8b98a9', LightweightCharts.LineStyle.Dotted, 1, 'Canceled', false);
+    }
+  });
+
+  statusChartPriceLines = newLines;
+  statusChart.timeScale().fitContent();
+}
+
 // Renders the Position Status card from a status payload shaped like
 // api/status.js's response ({hasPosition, position, pnl, projectedLiquidation,
 // sinceTime, orders}). Shared by the real /api/status fetch path and the
@@ -775,6 +1195,11 @@ function renderPositionStatus(data) {
     executeCard.style.display = '';
     dangerCard.style.display = 'none';
   }
+
+  // Fire-and-forget: the chart does its own async candle fetch and never
+  // throws out of this function -- a slow/failed chart load must never
+  // block or blank the summary/table above it.
+  renderStatusChart(data);
 }
 
 // Checks whether a position is currently open for the symbol in the Asset
