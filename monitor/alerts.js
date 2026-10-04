@@ -2,9 +2,8 @@
 // decide whether your phone buzzes are pinned by tests rather than found out
 // at 3am.
 //
-// Every alert stream (flush risk per symbol, liquidation distance per
-// position) has levels 0 (quiet), 1 (elevated/warning) and 2 (high/danger),
-// and follows the same rules:
+// Every alert stream (flush risk for BTC, and for the market basket) has
+// levels 0 (quiet), 1 (elevated) and 2 (high), and follows the same rules:
 //   - going UP to a level that hasn't been announced yet sends immediately;
 //   - staying at an active level re-sends only every `repeatMs` (a reminder,
 //     not a stream of duplicates);
@@ -41,11 +40,18 @@ function riskLevel(score, t) {
   return { level, hold: score >= t.clear };
 }
 
-// Liquidation distance (fraction of price) -> level. Closer is worse.
-function liqLevel(distance, t) {
-  if (!Number.isFinite(distance)) return null;
-  const level = distance <= t.danger ? 2 : distance <= t.warn ? 1 : 0;
-  return { level, hold: distance <= t.warn * 1.25 };
+// Market basket -> level. The OI-weighted score sets the level as for a
+// single coin, and breadth can lift it to at least elevated: when most of
+// the majors are stretched at once (`breadth.elevated`, default 70%), that's
+// a market-wide warning even if BTC's heavy weight keeps the average lower.
+// Breadth also holds an active alert until it falls below `breadth.hold`.
+function marketLevel(score, breadthShare, t, breadth) {
+  const base = riskLevel(score, t);
+  if (!base) return null;
+  return {
+    level: Math.max(base.level, breadthShare >= breadth.elevated ? 1 : 0),
+    hold: base.hold || breadthShare >= breadth.hold,
+  };
 }
 
-module.exports = { decide, riskLevel, liqLevel };
+module.exports = { decide, riskLevel, marketLevel };

@@ -280,13 +280,24 @@ function detectFlush(oi, price, { hours = 4, oiDropPct = 0.08, priceDropPct = 0.
   return { flushed: oiChg <= -oiDropPct && pxChg <= -priceDropPct, oiChg, pxChg, hours };
 }
 
-// Distance from the current price to a position's liquidation price, as a
-// fraction of the current price (0.2 = price has to move 20% against you).
-// null when there's no liquidation price (spot holdings, or exchange reports
-// none).
-function liqDistance({ side, liqPrice, price }) {
-  if (!(liqPrice > 0) || !(price > 0)) return null;
-  return side === 'short' ? liqPrice / price - 1 : 1 - liqPrice / price;
+// Market-wide reading from a basket of major perps (BTC, ETH, SOL, ...):
+// each coin's composite score, weighted by its open interest in USD, so the
+// basket behaves like the market's actual leverage (BTC and ETH dominate).
+// USD is right here, unlike in scoreOiLevel: the weights compare coins with
+// each other at one moment, they don't track change over time. Breadth
+// counts how many coins are at or above `elevated` on their own, because
+// leverage stretched across most of the market is a stronger warning than
+// one coin running hot. Coins whose score couldn't be computed are left out.
+function marketComposite(results, { elevated }) {
+  const scored = results.filter((r) => Number.isFinite(r.score));
+  if (!scored.length) return { score: null, count: 0, elevatedCount: 0, breadth: 0 };
+  const elevatedCount = scored.filter((r) => r.score >= elevated).length;
+  return {
+    score: weightedMean(scored.map((r) => ({ v: r.score, w: r.oiUsd }))),
+    count: scored.length,
+    elevatedCount,
+    breadth: elevatedCount / scored.length,
+  };
 }
 
 function computeSignals({ oi, price, premium, funding8h, fundingHistory8h, ratioSeriesList, taker, weights = DEFAULT_WEIGHTS, flushOpts }) {
@@ -321,6 +332,6 @@ module.exports = {
   scoreExtension,
   composite,
   detectFlush,
-  liqDistance,
+  marketComposite,
   computeSignals,
 };

@@ -1,11 +1,10 @@
-// Network layer for the monitor: public market data from Bybit and Binance
-// (no keys needed), plus open positions / spot holdings from the user's own
-// Bybit and MEXC accounts (read-only keys) via the main app's existing
-// clients. Everything here returns plain ascending-by-time series in the
-// shapes signals.js expects; all scoring stays in signals.js.
+// Network layer for the monitor: public market data from Bybit, Binance and
+// OKX. No keys and no account access: the monitor deliberately knows nothing
+// about the user's positions (the user manages position risk themselves).
+// Everything here returns plain ascending-by-time series in the shapes
+// signals.js expects; all scoring stays in signals.js.
 
-const { bybitGet, bybitOk, bybitErrMsg } = require('../bybitClient');
-const { futuresPrivateGet, futuresOk, spotPrivateGet, getFuturesContractDetail } = require('../mexcClient');
+const { bybitOk, bybitErrMsg } = require('../bybitClient');
 const { fundingTo8h } = require('./signals');
 
 const BYBIT = 'https://api.bybit.com';
@@ -153,81 +152,4 @@ async function okxMarket(asset) {
   };
 }
 
-// --- Account: open positions and spot holdings --------------------------------
-// Each returns [] when that exchange's keys aren't configured. A configured
-// exchange that errors throws, so the main loop can report it rather than
-// silently "seeing" no positions.
-
-function baseAsset(symbol) {
-  return String(symbol).toUpperCase().replace(/_USDT$/, '').replace(/USDT$/, '');
-}
-
-async function bybitPositions(env) {
-  const apiKey = env.BYBIT_API_KEY;
-  const secretKey = env.BYBIT_API_SECRET;
-  if (!apiKey || !secretKey) return [];
-  const [posData, walletData] = await Promise.all([
-    bybitGet('/v5/position/list', { category: 'linear', settleCoin: 'USDT' }, apiKey, secretKey),
-    bybitGet('/v5/account/wallet-balance', { accountType: 'UNIFIED' }, apiKey, secretKey),
-  ]);
-  if (!bybitOk(posData)) throw new Error(bybitErrMsg(posData, 'Bybit position lookup failed.'));
-  if (!bybitOk(walletData)) throw new Error(bybitErrMsg(walletData, 'Bybit wallet lookup failed.'));
-  const leveraged = (posData.result.list || [])
-    .filter((p) => Number(p.size) > 0)
-    .map((p) => ({
-      exchange: 'Bybit',
-      kind: 'leveraged',
-      asset: baseAsset(p.symbol),
-      side: p.side === 'Sell' ? 'short' : 'long',
-      size: Number(p.size),
-      avgPrice: Number(p.avgPrice),
-      liqPrice: Number(p.liqPrice) || null,
-      leverage: Number(p.leverage),
-      unrealisedPnl: Number(p.unrealisedPnl),
-    }));
-  const coins = walletData.result.list?.[0]?.coin || [];
-  const spot = coins
-    .filter((c) => c.coin !== 'USDT' && Number(c.walletBalance) > 0)
-    .map((c) => ({ exchange: 'Bybit', kind: 'spot', asset: c.coin, side: 'long', size: Number(c.walletBalance), usdValue: Number(c.usdValue) || null }));
-  return leveraged.concat(spot);
-}
-
-async function mexcPositions(env) {
-  const apiKey = env.MEXC_API_KEY;
-  const secretKey = env.MEXC_API_SECRET;
-  if (!apiKey || !secretKey) return [];
-  const [posData, account] = await Promise.all([
-    futuresPrivateGet('/api/v1/private/position/open_positions', {}, apiKey, secretKey),
-    spotPrivateGet('/api/v3/account', {}, apiKey, secretKey),
-  ]);
-  if (!futuresOk(posData)) throw new Error(`MEXC position lookup failed: ${posData?.message || 'unknown error'}`);
-  if (!Array.isArray(account?.balances)) throw new Error(`MEXC spot account lookup failed: ${account?.msg || 'unknown error'}`);
-  const open = (posData.data || []).filter((p) => Number(p.holdVol) > 0);
-  // MEXC futures sizes are contract counts; convert to coins for display.
-  const leveraged = await Promise.all(
-    open.map(async (p) => {
-      let contractSize = null;
-      try {
-        contractSize = Number((await getFuturesContractDetail(p.symbol)).contractSize) || null;
-      } catch {
-        // Display-only; fall back to showing the raw contract count.
-      }
-      return {
-        exchange: 'MEXC',
-        kind: 'leveraged',
-        asset: baseAsset(p.symbol),
-        side: Number(p.positionType) === 2 ? 'short' : 'long',
-        size: contractSize ? Number(p.holdVol) * contractSize : Number(p.holdVol),
-        avgPrice: Number(p.holdAvgPrice),
-        liqPrice: Number(p.liquidatePrice) || null,
-        leverage: Number(p.leverage),
-      };
-    }),
-  );
-  const spot = account.balances
-    .filter((b) => b.asset !== 'USDT' && Number(b.free) + Number(b.locked) > 0)
-    .map((b) => ({ exchange: 'MEXC', kind: 'spot', asset: b.asset, side: 'long', size: Number(b.free) + Number(b.locked), usdValue: null }));
-  return leveraged.concat(spot);
-}
-
-module.exports = { bybitMarket, binanceMarket, okxMarket, bybitPositions, mexcPositions };
+module.exports = { bybitMarket, binanceMarket, okxMarket };

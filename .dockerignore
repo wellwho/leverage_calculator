@@ -2,7 +2,6 @@
 # everything else, especially secrets, out of the build context.
 *
 !bybitClient.js
-!mexcClient.js
 !monitor/
 monitor/.env
 monitor/data/

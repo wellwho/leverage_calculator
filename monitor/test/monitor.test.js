@@ -4,7 +4,7 @@
 //   node monitor/test/monitor.test.js
 
 const S = require('../signals');
-const { decide, riskLevel, liqLevel } = require('../alerts');
+const { decide, riskLevel, marketLevel } = require('../alerts');
 
 let failures = 0;
 function check(label, actual, expected, tol = 1e-9) {
@@ -81,14 +81,32 @@ const c = S.composite(partial);
 check('missing signals are re-weighted, not zeroed', c.score, 0.25 / 0.45, 1e-12);
 check('coverage = weight share available', c.coverage, 0.45, 1e-12);
 
-console.log('\nFixture F — flush detection and liquidation distance');
+console.log('\nFixture F — flush detection');
 const oiDrop = hourly([100, 100, 100, 100, 95, 90], 'oi');
 const pxDrop = hourly([1, 1, 1, 1, 0.97, 0.94], 'close');
 check('OI -10% and price -6% over 4h is a flush', S.detectFlush(oiDrop, pxDrop).flushed, true);
 check('price drop with flat OI is not', S.detectFlush(hourly(Array(6).fill(100), 'oi'), pxDrop).flushed, false);
-check('long liq distance', S.liqDistance({ side: 'long', liqPrice: 80, price: 100 }), 0.2, 1e-12);
-check('short liq distance', S.liqDistance({ side: 'short', liqPrice: 120, price: 100 }), 0.2, 1e-12);
-check('no liq price (spot) -> null', S.liqDistance({ side: 'long', liqPrice: null, price: 100 }), null);
+
+console.log('\nFixture F2 — market basket');
+const basket = [
+  { asset: 'BTC', score: 0.6, oiUsd: 60 },
+  { asset: 'ETH', score: 0.8, oiUsd: 30 },
+  { asset: 'SOL', score: 0.9, oiUsd: 10 },
+  { asset: 'XRP', score: null, oiUsd: 5 }, // unreadable: left out entirely
+];
+const m = S.marketComposite(basket, { elevated: 0.7 });
+check('OI-weighted market score', m.score, (0.6 * 60 + 0.8 * 30 + 0.9 * 10) / 100, 1e-12);
+check('unscored coins are excluded from the count', m.count, 3);
+check('breadth counts coins at/above elevated', [m.elevatedCount, m.breadth], [2, 2 / 3]);
+check('empty basket gives no score', S.marketComposite([], { elevated: 0.7 }).score, null);
+const tm = { elevated: 0.7, high: 0.8, clear: 0.55 };
+const br = { elevated: 0.7, hold: 0.5 };
+check('low score, low breadth: quiet', marketLevel(0.5, 0.2, tm, br), { level: 0, hold: false });
+check('breadth >= 70% lifts a sub-threshold score to elevated', marketLevel(0.65, 0.8, tm, br).level, 1);
+check('breadth never lifts above elevated on its own', marketLevel(0.65, 1, tm, br).level, 1);
+check('high score is high regardless of breadth', marketLevel(0.85, 0.1, tm, br).level, 2);
+check('breadth >= 50% holds an active alert', marketLevel(0.5, 0.5, tm, br), { level: 0, hold: true });
+check('unreadable score -> null', marketLevel(null, 0.9, tm, br), null);
 
 console.log('\nFixture G — alert rules');
 const t = { elevated: 0.7, high: 0.8, clear: 0.55 };
@@ -118,9 +136,6 @@ d = decide(d.state, lc.level, lc.hold, 11 * H, REPEAT);
 check('below clear threshold sends one all-clear', d.send, 'clear');
 d = decide(d.state, 1, true, 12 * H, REPEAT);
 check('a new episode raises again after a clear', d.send, 'raise');
-check('liq 7% away is danger', liqLevel(0.07, { warn: 0.15, danger: 0.08 }).level, 2);
-check('liq 12% away is warning', liqLevel(0.12, { warn: 0.15, danger: 0.08 }).level, 1);
-check('liq 17% away: level 0 but still held (within warn x1.25)', liqLevel(0.17, { warn: 0.15, danger: 0.08 }), { level: 0, hold: true });
 
 if (failures) {
   console.log(`\n${failures} check(s) FAILED.`);
