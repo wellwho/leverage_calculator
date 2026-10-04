@@ -1,0 +1,8 @@
+# Only the flush monitor is built into an image (monitor/Dockerfile); keep
+# everything else, especially secrets, out of the build context.
+*
+!bybitClient.js
+!mexcClient.js
+!monitor/
+monitor/.env
+monitor/data/

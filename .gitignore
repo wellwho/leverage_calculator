@@ -4,3 +4,5 @@ node_modules
 *.orig
 .git.nosync
 .env*
+!.env.example
+monitor/data/
