@@ -17,7 +17,7 @@ vercel dev                             # local server: index.html + api/* functi
 vercel --prod                          # deploy (aborts if npm test fails)
 
 npm run test:monitor                   # monitor tests (deliberately NOT in npm test, see below)
-WATCHLIST=CRV,BTC node monitor/index.js --once   # one live monitor cycle; prints to stdout when no Telegram token
+node monitor/index.js --once           # one live monitor cycle (BTC + basket, ~40 s); prints to stdout when no Telegram token
 ```
 
 There is no linter or formatter configured, and no test framework: tests are hand-derived fixtures with a local `check()` helper.
@@ -65,19 +65,19 @@ Files:
 - `signals.js`: pure scoring. Percentile-ranks OI in coins, long build-up, OI-weighted funding and premium, etc. against each coin's ~3-week history; also `marketComposite`.
 - `alerts.js`: pure send/repeat/clear hysteresis plus the breadth rule.
 - `sources.js`: Bybit, Binance and OKX public endpoints.
-- `index.js`: the loop, Telegram, state and readings files in `DATA_DIR`, and the healthchecks.io ping.
+- `index.js`: the loop, Telegram, state and readings files in `DATA_DIR`, and the healthchecks.io ping. It pings `/fail` only when BTC or the Market score is missing; a single basket coin failing is only logged, so transient exchange hiccups don't page the user.
 
 Config is env vars; `monitor/.env.example` lists them all.
 
 - **Kept off Vercel.** `.vercelignore` excludes `monitor/`, which is why its test is not part of `npm test` (the Vercel build would fail to find it).
 - **Production host.** It runs on the user's Synology DS418j (ARM, no Docker support) using Synology's Node.js package (`/usr/local/bin/node`, v22), not the Dockerfile:
   - Code is copied to `~/flushmon` (layout: `bybitClient.js`, `monitor/`), with `data/` and `logs/` alongside.
-  - It is run by `monitor/nas/start.sh`, which supervises `run.sh`; `stop.sh` stops it. A DSM Task Scheduler boot-up task runs `start.sh` after reboots.
+  - `monitor/nas/start.sh` launches `run.sh` in the background (one instance, tracked by `~/flushmon/run.pid`); `run.sh` restarts Node 30 s after any exit. `stop.sh` stops both. A DSM Task Scheduler boot-up task runs `start.sh` after reboots.
   - SSH alias `plexnas` (key auth as `wellwho`, no passwordless sudo). `scp` doesn't work (SFTP is off); pipe over `ssh` instead.
-  - Deploy commands are in `monitor/README.md` ("Synology without Docker").
+  - **The NAS does not pull from git.** A change to `monitor/` or `bybitClient.js` only takes effect after copying it over and restarting (`stop.sh` then `start.sh`). The deploy commands are in `monitor/README.md` ("Synology without Docker"). Logs are in `~/flushmon/logs/monitor.log`, readings and alert state in `~/flushmon/data/`.
 - The Docker files (`monitor/Dockerfile`, `monitor/docker-compose.yml`, root `.dockerignore`) are for hosts that do have Docker.
 
 ## Repo notes
 
 - `.git` is a symlink to `.git.nosync`. The `.nosync` suffix keeps the git directory out of iCloud Documents sync.
-- `.env*` is gitignored except `.env.example`. Real secrets live in Vercel env vars, and in `monitor/.env` (Telegram token only) on the NAS.
+- `.env*` is gitignored except `.env.example`. Real secrets live in Vercel env vars, and in `monitor/.env` on the NAS (Telegram token and chat ID, heartbeat URL; no exchange keys).

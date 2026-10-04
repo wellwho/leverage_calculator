@@ -61,7 +61,7 @@ The bot only answers that chat; anyone else who finds it is ignored.
 
 ### 2. Heartbeat (recommended)
 
-If the NAS loses power or internet, the monitor can't tell you, because it's down too. Create a free check at [healthchecks.io](https://healthchecks.io) with a 5-minute period and ~15-minute grace, connect its Telegram integration, and put its ping URL in `HEALTHCHECK_URL`. The monitor pings after every cycle (and `/fail` when a cycle has errors).
+If the NAS loses power or internet, the monitor can't tell you, because it's down too. Create a free check at [healthchecks.io](https://healthchecks.io) with a 5-minute period and ~15-minute grace, connect its Telegram integration, and put its ping URL in `HEALTHCHECK_URL`. The monitor pings after every cycle, or pings `/fail` when BTC or the Market score couldn't be computed. A single basket coin failing is only logged.
 
 ### 3a. Synology without Docker (current production: DS418j)
 

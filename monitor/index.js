@@ -261,7 +261,12 @@ async function cycle(state) {
   ]);
 
   lastSnapshot = { at: now, watched, market, errors };
-  return errors;
+  // Degraded = the monitor can't do its job this cycle: a watchlist coin or
+  // the whole Market score is missing. One basket coin failing is only
+  // logged; reporting it to the heartbeat would page "down" on every
+  // transient exchange hiccup.
+  const degraded = watched.length < config.watchlist.length || !market;
+  return { errors, degraded };
 }
 
 async function notify(html) {
@@ -316,7 +321,7 @@ async function main() {
   log(`starting: watchlist=${config.watchlist.join(',')} basket=${config.basket.join(',')} poll=${config.pollMs / 1000}s telegram=${telegram.enabled ? 'on' : 'off (stdout)'} data=${config.dataDir}`);
 
   if (once) {
-    const errors = await cycle(state);
+    const { errors } = await cycle(state);
     saveState(state);
     console.log(statusText().replace(/<[^>]+>/g, ''));
     process.exit(errors.length ? 1 : 0);
@@ -326,10 +331,10 @@ async function main() {
   let first = true;
   for (;;) {
     try {
-      const errors = await cycle(state);
+      const { errors, degraded } = await cycle(state);
       saveState(state);
       if (errors.length) log(`cycle errors: ${errors.join(' | ')}`);
-      await ping(errors.length ? '/fail' : '');
+      await ping(degraded ? '/fail' : '');
       if (first) {
         first = false;
         await notify(`🟢 Flush monitor started. Watching ${esc(config.watchlist.join(', '))} and the market (${config.basket.length} majors). Send /status any time.`);
