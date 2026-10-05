@@ -103,6 +103,19 @@ npm run test:monitor
 
 Whatever machine runs it must not have a US IP address: Bybit and Binance block US addresses. A home connection in Croatia is fine.
 
+## Operations (Synology setup)
+
+From the Mac, with the `plexnas` SSH alias:
+
+| Task | Command |
+|---|---|
+| Is it running? | `ssh plexnas 'ps -o pid,rss,args \| grep "[i]ndex.js"'`, or send `/status` to the bot |
+| Recent log | `ssh plexnas 'tail -n 50 ~/flushmon/logs/monitor.log'`. Quiet is normal: it logs startups and errors only. |
+| Restart | `ssh plexnas 'sh ~/flushmon/monitor/nas/stop.sh; sh ~/flushmon/monitor/nas/start.sh'` |
+| Change a setting | Edit `monitor/.env` on the Mac, copy it over with the `cat >` line under 3a, then restart. |
+| Deploy a code change | The three commands under 3a. The NAS does not pull from git. |
+| Is it alive from outside? | The healthchecks.io check page; @HealthchecksBot messages on Telegram when it goes down or comes back. |
+
 ## Configuration
 
 All settings are environment variables in `monitor/.env`; `.env.example` lists every one with its default. To change what the score emphasises, use `WEIGHTS`, e.g. `WEIGHTS=premium=0.3,crowding=0`. Omitted keys keep their defaults, and weights don't need to sum to 1.
