@@ -1,13 +1,11 @@
 services:
-  flushmon:
-    build:
-      context: ..
-      dockerfile: monitor/Dockerfile
-    container_name: flushmon
+  flush-monitor:
+    build: .
+    container_name: flush-monitor
     env_file: .env
     restart: unless-stopped
     volumes:
-      - flushmon-data:/data
+      - flush-monitor-data:/data
     logging:
       driver: json-file
       options:
@@ -15,4 +13,4 @@ services:
         max-file: "3"
 
 volumes:
-  flushmon-data:
+  flush-monitor-data:

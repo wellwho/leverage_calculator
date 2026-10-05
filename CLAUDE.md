@@ -56,7 +56,7 @@ There is no linter or formatter configured, and no test framework: tests are han
 
 ## Flush monitor (`monitor/`)
 
-A standalone Node service with no dependencies (it borrows only `bybitOk`/`bybitErrMsg` from `../bybitClient.js`). It watches for a **market-wide** long flush:
+A self-contained Node service with no dependencies that imports nothing from outside `monitor/`. It watches for a **market-wide** long flush:
 - BTC (`WATCHLIST`) is scored and alerted individually.
 - A basket of 10 majors (`BASKET`) is combined into an OI-weighted Market score plus breadth. Basket coins never alert on their own.
 - It reads public market data only. It deliberately has no account access and sends no position or liquidation alerts; the user manages position risk themselves, so don't add any back.
@@ -65,17 +65,24 @@ Files:
 - `signals.js`: pure scoring. Percentile-ranks OI in coins, long build-up, OI-weighted funding and premium, etc. against each coin's ~3-week history; also `marketComposite`.
 - `alerts.js`: pure send/repeat/clear hysteresis plus the breadth rule.
 - `sources.js`: Bybit, Binance and OKX public endpoints.
-- `index.js`: the loop, Telegram, state and readings files in `DATA_DIR`, and the healthchecks.io ping. It pings `/fail` only when BTC or the Market score is missing; a single basket coin failing is only logged, so transient exchange hiccups don't page the user.
+- `index.js`: the loop, Telegram, `.env` loading, state and readings files in `DATA_DIR`, and the healthchecks.io ping. It pings `/fail` only when BTC or the Market score is missing; a single basket coin failing is only logged, so transient exchange hiccups don't page the user.
 
 Config is env vars; `monitor/.env.example` lists them all.
 
-- **Kept off Vercel.** `.vercelignore` excludes `monitor/`, which is why its test is not part of `npm test` (the Vercel build would fail to find it).
+**Public mirror: `monitor/` is the source of truth for the open-source repo `wellwho/flush-monitor`** (MIT; local clone at `../flush-monitor`, never edited directly):
+- `scripts/sync-flush-monitor.js` builds it from every file in `monitor/` except `README.md` (the NAS-specific one), `standalone/` and runtime files, then adds `monitor/standalone/` at the root (the public README, `package.json`, LICENSE, `.gitignore`).
+- The build fails, and nothing syncs, if a required file is missing, a relative `require` escapes `monitor/`, any JS has a syntax error, the tests fail, or a private string appears (NAS alias/paths, LAN IP, chat ID, bot name, token or ping-URL shapes, the app repo's name, `calc.js`/`statusCalc`).
+- The "Sync flush-monitor" GitHub Action (`.github/workflows/sync-flush-monitor.yml`) runs it on every push to `master` touching `monitor/` and pushes with the `FLUSH_MONITOR_DEPLOY_KEY` deploy key.
+- **The user's rule:** monitor changes are mirrored automatically when they can't break the standalone version. **Before pushing any change to `monitor/`, run `node scripts/sync-flush-monitor.js --check`.** If it fails, or the change could plausibly break the standalone version in ways the checks can't see (new required env vars, setup steps, Node version, behaviour the public README describes), stop and ask the user how to proceed instead of pushing. When the change affects what the public README says, update `monitor/standalone/README.md` in the same commit.
+
+**Deployment:**
+- **Kept off Vercel.** `.vercelignore` excludes `monitor/`, `scripts/` and `.github/`, which is why the monitor test is not part of `npm test` (the Vercel build would fail to find it).
 - **Production host.** It runs on the user's Synology DS418j (ARM, no Docker support) using Synology's Node.js package (`/usr/local/bin/node`, v22), not the Dockerfile:
-  - Code is copied to `~/flushmon` (layout: `bybitClient.js`, `monitor/`), with `data/` and `logs/` alongside.
-  - `monitor/nas/start.sh` launches `run.sh` in the background (one instance, tracked by `~/flushmon/run.pid`); `run.sh` restarts Node 30 s after any exit. `stop.sh` stops both. A DSM Task Scheduler boot-up task runs `start.sh` after reboots.
+  - The contents of `monitor/` live in `~/flushmon/monitor/`, with `.env`, `data/`, `logs/` and `run.pid` inside that folder.
+  - `nas/start.sh` launches `run.sh` in the background (one instance, tracked by `run.pid`); `run.sh` restarts Node 30 s after any exit. `stop.sh` stops both. A DSM Task Scheduler boot-up task runs `/var/services/homes/wellwho/flushmon/monitor/nas/start.sh` after reboots.
   - SSH alias `plexnas` (key auth as `wellwho`, no passwordless sudo). `scp` doesn't work (SFTP is off); pipe over `ssh` instead.
-  - **The NAS does not pull from git.** A change to `monitor/` or `bybitClient.js` only takes effect after copying it over and restarting (`stop.sh` then `start.sh`). The deploy commands are in `monitor/README.md` ("Synology without Docker"). Logs are in `~/flushmon/logs/monitor.log`, readings and alert state in `~/flushmon/data/`.
-- The Docker files (`monitor/Dockerfile`, `monitor/docker-compose.yml`, root `.dockerignore`) are for hosts that do have Docker.
+  - **The NAS does not pull from git.** A change only takes effect after copying it over and restarting. The deploy commands are in `monitor/README.md` ("Synology without Docker").
+- The Docker files (`monitor/Dockerfile`, `monitor/docker-compose.yml`, `monitor/.dockerignore`) build from `monitor/` itself and are for hosts that do have Docker.
 
 ## Repo notes
 

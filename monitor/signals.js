@@ -1,5 +1,5 @@
-// Flush-risk scoring — pure math, no network calls (same split as calc.js /
-// statusCalc.js in the main app, so it can be pinned by plain node tests).
+// Flush-risk scoring — pure math, no network calls, so it can be pinned by
+// plain node tests (test/monitor.test.js).
 //
 // A "flush" here means a long squeeze: price drops fast enough to liquidate
 // a crowd of leveraged longs, whose forced selling pushes price down further.

@@ -1,7 +1,7 @@
 // Pins the monitor's scoring (signals.js) and alert rules (alerts.js) with
-// hand-built fixtures. Same style as the main app's test/*.test.js: plain
-// node, prints PASS/FAIL per check, exits 1 on any failure.
-//   node monitor/test/monitor.test.js
+// hand-built fixtures. Plain node, no framework: prints PASS/FAIL per check
+// and exits 1 on any failure.
+//   npm test   (or: node test/monitor.test.js)
 
 const S = require('../signals');
 const { decide, riskLevel, marketLevel } = require('../alerts');

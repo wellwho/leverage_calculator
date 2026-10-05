@@ -1,0 +1,7 @@
+.git
+.env
+data/
+logs/
+run.pid
+nas/
+test/

@@ -1,4 +1,4 @@
-// Flush monitor: a long-running process (on the user's NAS, see README.md)
+// Flush monitor: a long-running process (e.g. on a home NAS, see README.md)
 // that watches for a MARKET-WIDE long flush. Every POLL_SECONDS it:
 //   1. scores flush risk (signals.js) for BTC (WATCHLIST) and for every coin
 //      in a basket of major perps (BASKET), from aggregated Bybit, Binance
@@ -6,8 +6,8 @@
 //   2. combines the basket into one OI-weighted Market score plus breadth
 //      (how many majors are elevated at once),
 //   3. sends Telegram alerts for BTC and for the Market only, per the rules
-//      in alerts.js: never for individual altcoins, and never about the
-//      user's own positions (it has no account access at all),
+//      in alerts.js: never for individual altcoins, and never about
+//      anyone's positions (it has no account access at all),
 //   4. appends readings to DATA_DIR/readings-YYYY-MM.jsonl for calibrating
 //      thresholds against what actually happened,
 //   5. pings HEALTHCHECK_URL, so silence from the monitor itself is noticed.
@@ -21,6 +21,22 @@ const { bybitMarket, binanceMarket, okxMarket } = require('./sources');
 const { createTelegram } = require('./telegram');
 
 // --- Config ------------------------------------------------------------------
+
+// Loads KEY=value lines from .env next to this file, if present. Values
+// already in the environment win (e.g. from Docker's env_file or a shell).
+function loadDotEnv(file) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+  }
+}
+loadDotEnv(path.join(__dirname, '.env'));
 
 const env = process.env;
 const num = (name, fallback) => (env[name] !== undefined && env[name] !== '' ? Number(env[name]) : fallback);

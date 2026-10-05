@@ -1,0 +1,43 @@
+# Mirrors monitor/ to the public standalone repo (wellwho/flush-monitor) on
+# every push to master that touches it. scripts/sync-flush-monitor.js builds
+# the standalone tree and refuses to sync if it would break the standalone
+# version or leak private details; in that case this job fails, GitHub
+# emails the repo owner, and nothing is pushed.
+name: Sync flush-monitor
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'monitor/**'
+      - 'scripts/sync-flush-monitor.js'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-flush-monitor
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the standalone build
+        run: node scripts/sync-flush-monitor.js --check
+
+      - uses: actions/checkout@v4
+        with:
+          repository: wellwho/flush-monitor
+          ssh-key: ${{ secrets.FLUSH_MONITOR_DEPLOY_KEY }}
+          path: .standalone
+
+      - name: Sync and push
+        run: |
+          git -C .standalone config user.name "github-actions[bot]"
+          git -C .standalone config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node scripts/sync-flush-monitor.js --target .standalone --push

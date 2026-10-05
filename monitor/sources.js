@@ -1,10 +1,12 @@
 // Network layer for the monitor: public market data from Bybit, Binance and
-// OKX. No keys and no account access: the monitor deliberately knows nothing
-// about the user's positions (the user manages position risk themselves).
-// Everything here returns plain ascending-by-time series in the shapes
-// signals.js expects; all scoring stays in signals.js.
+// OKX. No API keys and no account access, by design: the monitor watches the
+// market, not anyone's positions. Everything here returns plain
+// ascending-by-time series in the shapes signals.js expects; all scoring
+// stays in signals.js.
 
-const { bybitOk, bybitErrMsg } = require('../bybitClient');
+// Bybit V5 wraps every response in { retCode, retMsg, result }; retCode 0 = success.
+const bybitOk = (data) => !!data && data.retCode === 0;
+const bybitErrMsg = (data, fallback) => (data && data.retMsg ? `Bybit: ${data.retMsg} (retCode ${data.retCode})` : fallback);
 const { fundingTo8h } = require('./signals');
 
 const BYBIT = 'https://api.bybit.com';

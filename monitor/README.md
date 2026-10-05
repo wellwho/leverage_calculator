@@ -67,7 +67,7 @@ If the NAS loses power or internet, the monitor can't tell you, because it's dow
 
 Many Synology models, including ARM ones like the DS418j, can't run Container Manager. The monitor has no dependencies, so it runs directly on Synology's **Node.js** package (Package Center → Node.js v20 or v22).
 
-Layout on the NAS, copied from the repo: `~/flushmon/bybitClient.js` and `~/flushmon/monitor/` (including `.env`). The scripts create `~/flushmon/data/` (state + readings) and `~/flushmon/logs/monitor.log`.
+Layout on the NAS: the contents of `monitor/` live in `~/flushmon/monitor/` (including `.env`). The scripts create `data/` (state + readings), `logs/monitor.log` and `run.pid` inside that same folder.
 
 - `monitor/nas/start.sh` starts the monitor in the background unless it's already running. `run.sh` restarts it 30 s after any exit, keeps one rotated log, and caps the Node heap at 96 MB so it can't crowd out Plex.
 - `monitor/nas/stop.sh` stops it.
@@ -76,10 +76,10 @@ Layout on the NAS, copied from the repo: `~/flushmon/bybitClient.js` and `~/flus
 Deploying from a Mac, with an SSH alias `plexnas` for the NAS. Use `tar` over SSH, not `scp`: macOS `scp` needs SFTP, which Synology has off by default.
 
 ```sh
-COPYFILE_DISABLE=1 tar --no-xattrs -cf - --exclude monitor/.env --exclude monitor/data bybitClient.js monitor | ssh plexnas 'tar -xf - -C ~/flushmon'
+COPYFILE_DISABLE=1 tar --no-xattrs -C monitor -cf - --exclude .env --exclude data --exclude logs --exclude run.pid --exclude standalone . | ssh plexnas 'tar -xf - -C ~/flushmon/monitor'
 ssh plexnas 'umask 077 && cat > ~/flushmon/monitor/.env' < monitor/.env      # only when .env changed
 ssh plexnas 'sh ~/flushmon/monitor/nas/stop.sh; sh ~/flushmon/monitor/nas/start.sh'
-ssh plexnas 'tail -f ~/flushmon/logs/monitor.log'
+ssh plexnas 'tail -f ~/flushmon/monitor/logs/monitor.log'
 ```
 
 ### 3b. Any host with Docker
@@ -90,7 +90,7 @@ cd monitor && docker compose up -d --build
 docker compose logs -f
 ```
 
-`restart: unless-stopped` brings it back after a reboot. State and readings live in the `flushmon-data` volume.
+`restart: unless-stopped` brings it back after a reboot. State and readings live in the `flush-monitor-data` volume.
 
 ### Trying it locally
 
@@ -110,7 +110,7 @@ From the Mac, with the `plexnas` SSH alias:
 | Task | Command |
 |---|---|
 | Is it running? | `ssh plexnas 'ps -o pid,rss,args \| grep "[i]ndex.js"'`, or send `/status` to the bot |
-| Recent log | `ssh plexnas 'tail -n 50 ~/flushmon/logs/monitor.log'`. Quiet is normal: it logs startups and errors only. |
+| Recent log | `ssh plexnas 'tail -n 50 ~/flushmon/monitor/logs/monitor.log'`. Quiet is normal: it logs startups and errors only. |
 | Restart | `ssh plexnas 'sh ~/flushmon/monitor/nas/stop.sh; sh ~/flushmon/monitor/nas/start.sh'` |
 | Change a setting | Edit `monitor/.env` on the Mac, copy it over with the `cat >` line under 3a, then restart. |
 | Deploy a code change | The three commands under 3a. The NAS does not pull from git. |
@@ -124,7 +124,7 @@ All settings are environment variables in `monitor/.env`; `.env.example` lists e
 
 The default thresholds are a reasonable starting point, not tuned values. After a week or two:
 
-1. Pull the readings: `ssh plexnas 'cat ~/flushmon/data/readings-*.jsonl' > readings.jsonl`.
+1. Pull the readings: `ssh plexnas 'cat ~/flushmon/monitor/data/readings-*.jsonl' > readings.jsonl`.
 2. Find the real flushes in that period (the 🌊 messages, or sharp drops on the chart) and check what the BTC and `MARKET` scores were in the hours before each one.
 3. Adjust `RISK_ELEVATED`/`RISK_HIGH`, the breadth settings and `WEIGHTS` so the alerts would have fired ahead of the flushes that mattered, without firing constantly in between.
 
@@ -136,4 +136,17 @@ The default thresholds are a reasonable starting point, not tuned values. After 
 - `sources.js`: Bybit / Binance / OKX public market data.
 - `telegram.js`: send messages and receive commands.
 - `nas/`: start/stop/supervisor scripts for running without Docker.
+- `standalone/`: files only the public repo uses (its README, `package.json`, LICENSE, `.gitignore`); see "Public mirror" below.
 - `test/monitor.test.js`: fixtures for `signals.js` and `alerts.js`.
+
+## Public mirror
+
+This folder is the source of truth for the open-source repo [wellwho/flush-monitor](https://github.com/wellwho/flush-monitor).
+
+- **How it's built:** `scripts/sync-flush-monitor.js` takes every file here except this README, `standalone/` and runtime files, then adds `standalone/` at the root.
+- **When it runs:** on every push to `master` that touches `monitor/`, the "Sync flush-monitor" GitHub Action builds and checks that tree, then pushes it to the public repo.
+- **What it checks:** that every file is present, that imports stay inside the folder, syntax, the tests, and that nothing private is included (NAS details, chat ID, tokens, the heartbeat URL).
+- **If a check fails:** nothing is pushed, and the Action fails and emails you.
+
+Run the same checks locally with `node scripts/sync-flush-monitor.js --check`. If a change needs different handling in the public version, update `standalone/` (e.g. its README) in the same commit.
+

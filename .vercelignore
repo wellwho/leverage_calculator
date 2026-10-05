@@ -1,3 +1,4 @@
-# The flush monitor runs on the NAS in Docker, not on Vercel.
+# The flush monitor runs on the NAS, not on Vercel.
 monitor/
-.dockerignore
+.github/
+scripts/

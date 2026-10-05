@@ -6,3 +6,5 @@ node_modules
 .env*
 !.env.example
 monitor/data/
+monitor/logs/
+monitor/run.pid

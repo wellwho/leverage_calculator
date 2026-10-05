@@ -1,0 +1,16 @@
+{
+  "name": "flush-monitor",
+  "version": "1.0.0",
+  "description": "Watches BTC and the crypto derivatives market for long-flush risk (open interest, funding, perp premium) and alerts on Telegram. Free public data, no API keys, no dependencies.",
+  "license": "MIT",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "once": "node index.js --once",
+    "test": "node test/monitor.test.js"
+  }
+}
