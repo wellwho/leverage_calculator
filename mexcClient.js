@@ -119,8 +119,16 @@ async function getFuturesTicker(symbol) {
 // (time in unix SECONDS, ascending) both api/price.js and
 // api/spot/[action].js's kline action expect, so neither has to know MEXC
 // Futures' response shape is different at all.
-async function getFuturesKline(symbol, limit) {
-  const res = await fetch(`${FUTURES_KLINE_URL}/${encodeURIComponent(symbol)}?interval=Hour4`);
+// `interval` uses Bybit's names ('1', '5', '15', '60', '240', 'D'; default
+// '240') so callers don't need to know MEXC's own interval vocabulary, which
+// differs between its Futures and Spot APIs. `startMs` is optional: the demo
+// simulator passes it to fetch every candle since a position opened.
+const FUTURES_INTERVALS = { 1: 'Min1', 5: 'Min5', 15: 'Min15', 60: 'Min60', 240: 'Hour4', D: 'Day1' };
+const SPOT_INTERVALS = { 1: '1m', 5: '5m', 15: '15m', 60: '60m', 240: '4h', D: '1d' };
+
+async function getFuturesKline(symbol, limit, { interval = '240', startMs } = {}) {
+  const startQs = startMs ? `&start=${Math.floor(startMs / 1000)}&end=${Math.floor(Date.now() / 1000)}` : '';
+  const res = await fetch(`${FUTURES_KLINE_URL}/${encodeURIComponent(symbol)}?interval=${FUTURES_INTERVALS[interval] || 'Hour4'}${startQs}`);
   const data = await res.json();
   if (!data || data.success !== true || !data.data || !Array.isArray(data.data.time)) {
     throw new Error(data?.message || `No candle data found for "${symbol}" on MEXC futures.`);
@@ -168,6 +176,22 @@ const spotPrivateGet = (path, params, apiKey, secretKey) => spotSignedRequest('G
 const spotPrivatePost = (path, params, apiKey, secretKey) => spotSignedRequest('POST', path, params, apiKey, secretKey);
 const spotPrivateDelete = (path, params, apiKey, secretKey) => spotSignedRequest('DELETE', path, params, apiKey, secretKey);
 
+// Settled funding rates since `startMs`, newest page first, as
+// [{ time (ms), rate }] ascending. Public, no auth. Used by the demo
+// simulator to charge funding on a simulated perp position.
+async function getFuturesFundingHistory(symbol, startMs) {
+  const out = [];
+  for (let page = 1; page <= 10; page++) {
+    const res = await fetch(`https://contract.mexc.com/api/v1/contract/funding_rate/history?symbol=${encodeURIComponent(symbol)}&page_num=${page}&page_size=100`);
+    const data = await res.json();
+    const list = data && data.success === true && Array.isArray(data.data?.resultList) ? data.data.resultList : null;
+    if (!list) throw new Error(data?.message || `No funding history found for "${symbol}" on MEXC futures.`);
+    list.forEach((f) => out.push({ time: Number(f.settleTime), rate: Number(f.fundingRate) }));
+    if (list.length < 100 || list.some((f) => Number(f.settleTime) < startMs)) break;
+  }
+  return out.filter((f) => f.time >= startMs).sort((a, b) => a.time - b.time);
+}
+
 async function getSpotTicker(symbol) {
   const res = await fetch(`${SPOT_BASE_URL}/api/v3/ticker/price?symbol=${encodeURIComponent(symbol)}`);
   return res.json();
@@ -177,8 +201,11 @@ async function getSpotTicker(symbol) {
 // getFuturesKline above. MEXC Spot returns an array-of-arrays like Bybit
 // does (unlike Futures' parallel-array shape), but with a different column
 // layout: [openTime, open, high, low, close, volume, closeTime, ...].
-async function getSpotKline(symbol, limit) {
-  const qs = `symbol=${encodeURIComponent(symbol)}&interval=Hour4&limit=${limit || 150}`;
+// MEXC Spot rejects "Hour4" (it wants "4h"), which is what this used to send,
+// so the MEXC Spot chart never loaded. It also ignores startTime and returns
+// at most the latest 500 candles, so callers wanting "since X" must filter.
+async function getSpotKline(symbol, limit, { interval = '240' } = {}) {
+  const qs = `symbol=${encodeURIComponent(symbol)}&interval=${SPOT_INTERVALS[interval] || '4h'}&limit=${Math.min(limit || 150, 500)}`;
   const res = await fetch(`${SPOT_BASE_URL}/api/v3/klines?${qs}`);
   const data = await res.json();
   if (!Array.isArray(data)) {
@@ -241,6 +268,7 @@ module.exports = {
   getFuturesContractDetail,
   getFuturesTicker,
   getFuturesKline,
+  getFuturesFundingHistory,
   // Spot
   spotPrivateGet,
   spotPrivatePost,

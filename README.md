@@ -15,6 +15,7 @@ Live entry price is pulled from whichever exchange is currently selected (linear
 - `index.html` — UI (inputs + results table), with a Bybit/MEXC exchange switch above a Leveraged/Spot tab switch. `exchange` (a page-level variable, remembered across reloads via `localStorage`) is threaded into every fetch call as a query param (GET) or body field (POST); every server endpoint reads it and dispatches to the matching exchange's logic. `toFuturesSymbol` builds the right symbol format per exchange (Bybit: `CRVUSDT` everywhere; MEXC: `CRV_USDT` for futures, `CRVUSDT` for spot).
 - `calc.js` — calculation engine: `computePlan` (leveraged) and `computeSpotPlan` (spot), sharing a `buildLadderShape` helper so both tabs trigger at identical prices, with identically-shaped buy sizes (peaking at the "Peak buy drawdown" you set — -35% by default), for the same inputs. Both tabs commit 100% of the chosen capital across the ladder — no reserve held back on either one. Entirely exchange-agnostic — pure math, no network calls — so it needs zero changes to work identically on both exchanges.
 - `statusCalc.js` — P&L / projected-liquidation math (shared by `api/status.js` server-side and, in demo mode, by `index.html` client-side); also exchange-agnostic.
+- `demoSim.js` — the demo-mode trading simulator (fills, liquidation, fees, funding, trade history); pure functions loaded by `index.html` and tested by `test/demo-sim.test.js`. See "Demo mode" below.
 - `api/config.js` — tells `index.html` whether this deployment is running in demo mode
 - `bybitClient.js` — shared Bybit V5 signing/fetch helper used by every `api/*.js` file below (one auth scheme covers both linear and spot)
 - `mexcClient.js` — shared MEXC signing/fetch helper, mirroring `bybitClient.js`'s shape. MEXC genuinely needs two different signing schemes (Futures: `ApiKey`/`Request-Time`/`Signature` headers; Spot v3: `X-MEXC-APIKEY` header + a signed query string) where Bybit uses one for everything — see the file's header comment.
@@ -252,7 +253,22 @@ Bybit uses the **same** V5 signing scheme, symbol format, and response envelope 
 
 ### Demo mode
 
-Demo mode simulates Leveraged and Spot as two independent fake accounts (`localStorage` keys `leveraged` / `spot`, each with its own starting $1,000 balance and simulated position) — switching tabs in the demo doesn't share balance or position state between them. Demo mode is deliberately **exchange-agnostic**: the same simulated Leveraged/Spot accounts show up regardless of which exchange the top toggle currently selects, rather than doubling the simulated-account structure per exchange — nothing in demo mode ever calls a real exchange endpoint either way, so there's no real account model to mirror precisely. (For real, non-demo use: Bybit's Unified Trading Account shares ONE pool of collateral between Spot and Leveraged, where MEXC keeps them genuinely separate — see "Pull available funds" above.)
+Demo mode is a **paper-trading simulator** on real market data. Leveraged and Spot are two independent simulated accounts (each starting at $1,000, stored in this browser's `localStorage` under `demoAccount`); switching tabs doesn't share balance or positions between them. (For real, non-demo use: Bybit's Unified Trading Account shares ONE pool of collateral between Spot and Leveraged, where MEXC keeps them genuinely separate — see "Pull available funds" above.)
+
+How a simulated run behaves (the rules live in `demoSim.js`'s header comment):
+- **Execute:** Buy #1 fills at a freshly fetched live price, with a taker fee. Every other rung rests. Resting orders reserve their margin (Leveraged) or USDT (Spot), so the available balance drops the way it does on a real exchange. The last rung is shrunk to what's actually free, like the real last-order sweep, and a plan that needs more than the free balance before the last rung is refused.
+- **Fills:** each limit buy fills at its own price, with a maker fee, once the real market trades down to it. "Real market" means candles from the exchange the position was opened on, via `api/price.js?kline=1&interval=&start=` (Leveraged) or `api/spot/kline?interval=&start=` (Spot).
+- **Liquidation (Leveraged):** the position is liquidated, losing its whole isolated margin, once the price reaches the liquidation price `avgEntry × (1 + MMR) − margin ÷ qty`. That's the same formula as `statusCalc.js`, recomputed after every fill. Remaining orders are canceled, and the page shows a notice.
+- **Funding (Leveraged):** charged at every real settlement (`api/price.js?funding=1`) as `qty × price × rate`.
+- **Fees:** Bybit's base tier on both exchanges (perps 0.055% taker / 0.02% maker, spot 0.1%).
+- **Close position:** catches the simulation up first, then sells everything at the live price, with a taker fee.
+- **Results:** every closed or liquidated run is added to the **Simulated account** card. It shows wallet, equity, total return and a trade history with net P&L after fees and funding.
+
+**How it advances.** The page re-checks every minute while it's open (and on load, "Refresh status", Close) and catches up from where it left off, using the finest candle interval that covers the gap in ≤450 candles (1m up to daily). Only the lowest price reached matters, because fills and liquidation are both downside events. So each candle is processed by walking its low from the top: fill the highest rung still above both the low and the current liquidation price, recompute, repeat; if the liquidation price comes first, liquidate. That makes the result independent of candle size, and re-processing a candle is harmless.
+
+**Not modelled:** slippage, order-book depth, and mark price (liquidation uses traded prices). Fills inside the candle that contains the execute time are also missed, since that candle includes pre-execute prices.
+
+A simulated position belongs to the exchange it was opened on. On page load the demo looks for an open simulated position, never for a real account (`discoverActiveSymbol()` is skipped in demo mode). Positions saved by the older, non-simulating demo are upgraded in place.
 
 ## Login
 
@@ -297,7 +313,7 @@ For showing the app to someone without giving them access to the real Bybit acco
 
 ### What demo mode changes
 - `middleware.js` skips the login check entirely when `DEMO_MODE=true`, so the page loads directly with no session required.
-- "Get balance", "Execute plan", "Close position" and the Position Status card no longer call `api/balance.js` / `api/execute.js` / `api/status.js` / `api/close.js`. Instead, `index.html` simulates a fake account (starting balance $1,000) entirely client-side, storing the simulated position in the browser's `localStorage`. The same `statusCalc.js` math (P&L, projected liquidation) that the real deployment uses server-side runs client-side for the simulation, so the numbers behave identically.
+- "Get balance", "Execute plan", "Close position" and the Position Status card no longer call `api/balance.js` / `api/execute.js` / `api/status.js` / `api/close.js`. Instead, `index.html` runs a paper-trading simulation (starting balance $1,000) entirely client-side with `demoSim.js`, on real public candles and funding rates, storing the simulated account in the browser's `localStorage`. See "Demo mode" under Spot DCA mode for the rules.
 - The live price feed (`api/price.js`) still hits Bybit's real *public* ticker — that's not account data, so the demo shows genuine live market prices while everything account-related is fake.
 - A "DEMO MODE" banner appears at the top of the page, and "Log out" becomes "Reset demo" (clears the simulated position/balance back to a fresh $1,000).
 - Since nothing sensitive is ever touched, the demo project needs **no environment variables at all** — no `BYBIT_API_KEY`, `BYBIT_API_SECRET`, `APP_USERNAME`, `APP_PASSWORD`, or `SESSION_SECRET`. Just `DEMO_MODE=true`.
@@ -329,7 +345,7 @@ This serves `index.html` and runs `api/price.js` locally so the "Get price" butt
 
 ## Backfill validation
 
-Five test files, all wired into `npm test`:
+Six test files, all wired into `npm test`:
 
 - `test/backfill.test.js` checks `calc.js`'s `computePlan` (the leveraged ladder-sizing engine): an exactly hand-derived single-buy fixture, a hand-derived multi-buy fixture with an explicit peak-drawdown override (confirming the peak control actually plumbs through), structural invariants (capital conservation — `totalBuys == capital`, nothing withheld — the sweet-spot peak landing where the ladder's own spacing says it should, the hump shape, and an independent reconstruction of avg entry/liquidation/quantity from each row's own raw price/qty/amount) checked across a spread of inputs, and the input-validation error paths. It also checks `ladderSurvival`/`scanPeakFeasibility` (the feasibility indicator's math) against hand-reasoned cases: a case that's structurally impossible for any peak setting, a case reachable only with a deep-enough peak, and a low-leverage case that's trivially safe. There's no external spreadsheet backfill for the current sweet-spot-peaked shape — see the file's header comment for why. None of this depends on which exchange is selected — `calc.js` is exchange-agnostic.
 - `test/status-backfill.test.js` checks `statusCalc.js` — the P&L and projected-liquidation math shown on the Position Status card — against hand-computed, independently cross-checked fixtures (a loss scenario with resting orders, a zero-resting-orders case, a profitable long, and a profitable short). Also exchange-agnostic.
@@ -337,7 +353,9 @@ Five test files, all wired into `npm test`:
 - `test/spot-status-classify.test.js` pins `api/spot/[action].js`'s `classify` (the Bybit order-status classifier) against Bybit's own `orderStatus` enum — fixtures for a market buy placed via `marketUnit: "quoteCoin"`, resting/partial/filled limit orders, and canceled/rejected orders.
 - `test/mexc-status-classify.test.js` pins `api/spot/[action].js`'s `classifyMexc` (the MEXC order-status classifier) against MEXC's own fixtures — including the market-buy-via-`quoteOrderQty` quirk (`origQty` stays `"0.000000"` even once filled, so `status` is checked first) and the quantity-comparison fallback path for any status string the function doesn't recognize.
 
-Run all five any time you change `calc.js`, `statusCalc.js`, or either exchange's order-status classifier:
+- `test/demo-sim.test.js` checks `demoSim.js`, the demo simulator, against hand-worked fixtures: opening a ladder (fees, margin, liquidation price, available balance), a rung filling then a later liquidation, the same outcome from one coarse candle, re-processing a candle, liquidation before the next rung, funding between candles (and not charged twice), manual closes on both tabs with P&L reconciling to the wallet, the last-rung sweep, and refused over-sized plans.
+
+Run all six any time you change `calc.js`, `statusCalc.js`, or either exchange's order-status classifier:
 
 ```
 npm test

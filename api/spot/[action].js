@@ -93,16 +93,23 @@ async function handlePrice(req, res, exchange) {
 // deliberately dispatched BEFORE the API-key check below (same as the
 // existing `price` action) rather than after it.
 // =====================================================================
+// Optional `interval` (Bybit vocabulary) and `start` (ms) are used by the demo
+// simulator; see api/price.js's matching comment. MEXC Spot ignores a start
+// time, so its branch filters the returned candles instead.
+const KLINE_INTERVALS = new Set(['1', '5', '15', '60', '240', 'D']);
+
 async function handleKline(req, res, symbol, exchange) {
-  const limit = Math.min(Math.max(Number(req.query.limit) || 150, 10), 500);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 150, 10), 1000);
+  const interval = KLINE_INTERVALS.has(String(req.query.interval)) ? String(req.query.interval) : '240';
+  const startMs = Number(req.query.start) > 0 ? Number(req.query.start) : undefined;
   try {
     if (exchange === 'mexc') {
-      const candles = await getSpotKline(symbol, limit);
-      res.status(200).json({ candles });
+      const candles = await getSpotKline(symbol, limit, { interval });
+      res.status(200).json({ candles: startMs ? candles.filter((c) => c.time * 1000 >= startMs) : candles });
       return;
     }
 
-    const data = await bybitPublicGet('/v5/market/kline', { category: 'spot', symbol, interval: '240', limit });
+    const data = await bybitPublicGet('/v5/market/kline', { category: 'spot', symbol, interval, limit, start: startMs });
     if (!data || data.retCode !== 0 || !Array.isArray(data.result?.list)) {
       res.status(502).json({ error: data?.retMsg ? `Bybit: ${data.retMsg}` : 'Could not fetch candles from Bybit spot.' });
       return;

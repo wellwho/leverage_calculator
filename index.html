@@ -221,7 +221,7 @@
     <button id="logoutBtn" class="secondary" style="flex: 0 0 auto; margin-top: 2px;">Log out</button>
   </div>
 
-  <div id="demoBanner" class="demo-banner">DEMO MODE — all balances, positions and orders on this page are simulated. No real exchange account is connected and no real trades are ever placed.</div>
+  <div id="demoBanner" class="demo-banner">DEMO MODE — a simulated $1,000 account trading on real market prices. Limit orders fill when the real price reaches them; fees, funding and liquidation are applied. No real exchange account is connected and no real trades are ever placed.</div>
 
   <div class="tabs">
     <button id="exchangeBybitBtn" class="tab-btn active">Bybit</button>
@@ -450,6 +450,40 @@
     </div>
   </div>
 
+  <!-- Demo only: the simulated account's running result and closed trades
+       for the current tab (Leveraged and Spot are separate simulated
+       accounts). Filled in by renderDemoAccountCard(). -->
+  <div class="card" id="demoAccountCard" style="display: none;">
+    <h2 id="demoAccountTitle">Simulated account</h2>
+    <div class="summary-grid">
+      <div class="stat"><div class="label">Starting balance</div><div class="value" id="demoStart">—</div></div>
+      <div class="stat"><div class="label" id="demoWalletLabel">Wallet balance</div><div class="value" id="demoWallet">—</div></div>
+      <div class="stat"><div class="label">Equity</div><div class="value" id="demoEquity">—</div></div>
+      <div class="stat"><div class="label">Total return</div><div class="value" id="demoReturn">—</div></div>
+      <div class="stat"><div class="label">Closed trades</div><div class="value" id="demoTrades">—</div></div>
+    </div>
+    <div class="table-scroll">
+      <table id="demoHistoryTable" style="margin-top: 14px; display: none;">
+        <thead>
+          <tr>
+            <th>Closed</th>
+            <th>Asset</th>
+            <th>Outcome</th>
+            <th>Rungs filled</th>
+            <th>Avg entry ($)</th>
+            <th>Exit ($)</th>
+            <th>Fees + funding ($)</th>
+            <th>Net P&amp;L ($)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="note">
+      How the simulation works: Buy #1 fills at the live price when you execute. Each limit buy fills at its own price once the real market (1-minute to daily candles from the selected exchange) trades down to it. On the Leveraged tab the position is liquidated, losing its whole margin, if the price reaches the liquidation price, and funding is charged at every real 8-hour settlement. Fees follow Bybit's base tier (perps 0.055% taker / 0.02% maker, spot 0.1%). The page re-checks every minute while it's open and catches up on everything that happened while it was closed. Not modelled: slippage, order-book depth, and mark price (liquidation uses traded prices). Everything is stored in this browser only; "Reset demo" starts over.
+    </div>
+  </div>
+
   <footer id="footerNote">Prices via Bybit Spot public ticker. Not financial advice.</footer>
 </div>
 
@@ -464,6 +498,7 @@
 <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="calc.js"></script>
 <script src="statusCalc.js"></script>
+<script src="demoSim.js"></script>
 <script>
 const fmt2 = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmt4 = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
@@ -553,7 +588,31 @@ let demoMode = false;
 const DEMO_STORAGE_KEY = 'demoAccount';
 const DEMO_STARTING_BALANCE = 1000;
 
+// Upgrades a position saved by the pre-simulator demo (no fills, no fees,
+// and a spot "balance" that never paid for the holdings) into demoSim.js's
+// shape, so an open demo position survives the upgrade.
+function upgradeDemoPosition(acct, modeName) {
+  const pos = acct.position;
+  if (!pos || pos.v === 2) return;
+  const since = Number(pos.sinceTime) || Date.now();
+  if (modeName === 'spot') acct.balance -= pos.holdAvgPrice * pos.holdVol;
+  acct.position = {
+    ...pos,
+    v: 2,
+    openTime: since,
+    cost: pos.holdAvgPrice * pos.holdVol,
+    fees: 0,
+    funding: 0,
+    simulatedUntil: since,
+    fundingUntil: since,
+    lastPrice: pos.holdAvgPrice,
+    lastPriceTime: since,
+    orders: (pos.orders || []).map((o) => ({ ...o, step: Number(String(o.orderId).replace('DEMO-', '')) || null })),
+  };
+}
+
 function loadDemoAccount() {
+  let account = null;
   try {
     const raw = localStorage.getItem(DEMO_STORAGE_KEY);
     if (raw) {
@@ -562,21 +621,153 @@ function loadDemoAccount() {
       // leveraged-only account. Upgrade it into the per-mode shape rather
       // than silently discarding it.
       if (parsed && !parsed.leveraged && !parsed.spot) {
-        return { leveraged: parsed, spot: { balance: DEMO_STARTING_BALANCE, position: null } };
+        account = { leveraged: parsed, spot: { balance: DEMO_STARTING_BALANCE, position: null } };
+      } else if (parsed && parsed.leveraged && parsed.spot) {
+        account = parsed;
       }
-      if (parsed && parsed.leveraged && parsed.spot) return parsed;
     }
   } catch {
-    // corrupt/old data — fall through to a fresh account
+    // corrupt/old data, or storage blocked — fall through to a fresh account
   }
-  return {
-    leveraged: { balance: DEMO_STARTING_BALANCE, position: null },
-    spot: { balance: DEMO_STARTING_BALANCE, position: null },
-  };
+  if (!account) {
+    account = {
+      leveraged: { balance: DEMO_STARTING_BALANCE, position: null },
+      spot: { balance: DEMO_STARTING_BALANCE, position: null },
+    };
+  }
+  ['leveraged', 'spot'].forEach((m) => {
+    if (!Array.isArray(account[m].history)) account[m].history = [];
+    upgradeDemoPosition(account[m], m);
+  });
+  return account;
 }
 
 function saveDemoAccount(account) {
-  localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(account));
+  try {
+    localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(account));
+  } catch {
+    // storage blocked (private window etc.) — the demo still runs, it just won't persist
+  }
+}
+
+// Brings the open simulated position for `modeName` up to date with real
+// market data (demoSim.js's advancePosition): fetches every candle since it
+// was last simulated, at the finest interval that fits, plus funding
+// settlements for perps. Concurrent callers share one run, since page load
+// checks several tab/exchange combos at once. Returns { acct, trade, error }.
+const demoSyncInFlight = {};
+function demoSync(modeName) {
+  if (!demoSyncInFlight[modeName]) {
+    demoSyncInFlight[modeName] = runDemoSync(modeName).finally(() => { delete demoSyncInFlight[modeName]; });
+  }
+  return demoSyncInFlight[modeName];
+}
+
+async function runDemoSync(modeName) {
+  const acct = loadDemoAccount()[modeName];
+  const pos = acct.position;
+  if (!pos) return { acct, trade: null, error: null };
+
+  const now = Date.now();
+  const startMs = Math.max(pos.openTime, pos.simulatedUntil || pos.openTime);
+  const { interval } = pickSimInterval(startMs, now);
+  const exch = pos.exchange || exchange;
+  const sym = encodeURIComponent(pos.symbol);
+  const klineUrl = modeName === 'leveraged'
+    ? `/api/price?symbol=${sym}&exchange=${exch}&kline=1&interval=${interval}&start=${startMs}&limit=1000`
+    : `/api/spot/kline?symbol=${sym}&exchange=${exch}&interval=${interval}&start=${startMs}&limit=1000`;
+
+  let candles;
+  let funding = [];
+  try {
+    const res = await fetch(klineUrl);
+    const json = await res.json();
+    if (!res.ok || !Array.isArray(json.candles)) throw new Error(json.error || 'No candle data returned.');
+    candles = json.candles;
+  } catch (err) {
+    return { acct, trade: null, error: `Could not load market data to update the simulation: ${err.message || err}` };
+  }
+  if (modeName === 'leveraged') {
+    try {
+      const res = await fetch(`/api/price?symbol=${sym}&exchange=${exch}&funding=1&start=${pos.fundingUntil}`);
+      const json = await res.json();
+      if (res.ok && Array.isArray(json.funding)) funding = json.funding;
+    } catch {
+      // funding is retried next time (its cursor only moves when applied)
+    }
+  }
+
+  const out = advancePosition(acct, modeName, candles, funding, now);
+  const account = loadDemoAccount();
+  account[modeName] = out.acct;
+  saveDemoAccount(account);
+  if (out.trade) showDemoLiquidation(out.trade);
+  return { acct: out.acct, trade: out.trade, error: null };
+}
+
+function showDemoLiquidation(trade) {
+  const statusEl = el('execStatus');
+  statusEl.textContent = `Your simulated ${trade.symbol} position was liquidated at $${fmtPrice(trade.exitPrice)} on ${new Date(trade.closeTime).toLocaleString()} (${trade.filled}/${trade.total} rungs filled). Net result: -$${fmt2(Math.abs(trade.pnl))}. See "Simulated account" below.`;
+  statusEl.className = 'price-status err';
+  el('execTable').style.display = 'none';
+}
+
+const signedUsd = (n) => `${n >= 0 ? '+' : '-'}$${fmt2(Math.abs(n))}`;
+
+// Demo only: the current tab's simulated account summary and closed trades.
+function renderDemoAccountCard() {
+  const card = el('demoAccountCard');
+  if (!demoMode) { card.style.display = 'none'; return; }
+  const acct = loadDemoAccount()[mode];
+  const equity = demoEquity(acct, mode);
+  const ret = equity - DEMO_STARTING_BALANCE;
+  el('demoAccountTitle').textContent = `Simulated account — ${mode === 'spot' ? 'Spot' : 'Leveraged'}`;
+  el('demoWalletLabel').textContent = mode === 'spot' ? 'USDT cash' : 'Wallet balance';
+  el('demoStart').textContent = `$${fmt2(DEMO_STARTING_BALANCE)}`;
+  el('demoWallet').textContent = `$${fmt2(acct.balance)}`;
+  el('demoEquity').textContent = `$${fmt2(equity)}`;
+  const retEl = el('demoReturn');
+  retEl.textContent = `${signedUsd(ret)} (${ret >= 0 ? '+' : ''}${((ret / DEMO_STARTING_BALANCE) * 100).toFixed(2)}%)`;
+  retEl.style.color = ret >= 0 ? 'var(--green)' : 'var(--red)';
+  const wins = acct.history.filter((t) => t.pnl > 0).length;
+  el('demoTrades').textContent = acct.history.length ? `${acct.history.length} (${wins} won)` : '0';
+
+  const table = el('demoHistoryTable');
+  const tbody = table.querySelector('tbody');
+  tbody.innerHTML = '';
+  acct.history.forEach((t) => {
+    const tr = document.createElement('tr');
+    const outcome = t.outcome === 'liquidated' ? 'Liquidated' : 'Closed';
+    tr.innerHTML = `
+      <td>${new Date(t.closeTime).toLocaleString()}</td>
+      <td style="text-align: left;">${t.symbol}${t.leverage ? ` ${t.leverage}x` : ''}</td>
+      <td style="color: ${t.outcome === 'liquidated' ? 'var(--red)' : 'var(--text)'};">${outcome}</td>
+      <td>${t.filled}/${t.total}</td>
+      <td>$${fmtPrice(t.avgEntry)}</td>
+      <td>$${fmtPrice(t.exitPrice)}</td>
+      <td>$${fmt2(t.fees + t.funding)}</td>
+      <td style="color: ${t.pnl >= 0 ? 'var(--green)' : 'var(--red)'};">${signedUsd(t.pnl)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  table.style.display = acct.history.length ? '' : 'none';
+  card.style.display = '';
+}
+
+// Fetches the live price for the simulated position's own market, falling
+// back to the last simulated close. Used for manual closes.
+async function demoLivePrice(modeName, pos) {
+  const url = modeName === 'leveraged'
+    ? `/api/price?symbol=${encodeURIComponent(pos.symbol)}&exchange=${pos.exchange || exchange}`
+    : `/api/spot/price?symbol=${encodeURIComponent(pos.symbol)}&exchange=${pos.exchange || exchange}`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (res.ok && Number(data.lastPrice) > 0) return Number(data.lastPrice);
+  } catch {
+    // fall through
+  }
+  return pos.lastPrice || pos.holdAvgPrice;
 }
 
 async function initDemoMode() {
@@ -1135,7 +1326,7 @@ function renderPositionStatus(data) {
 
     const sinceLabel = el('sinceLabel');
     if (data.sinceTime) {
-      sinceLabel.textContent = `Since ${new Date(data.sinceTime).toLocaleString()}`;
+      sinceLabel.textContent = `Since ${new Date(data.sinceTime).toLocaleString()}${data.demoNote ? ` · ${data.demoNote}` : ''}`;
       sinceLabel.className = 'price-status';
     } else {
       const daysSearched = data.orderDebug && data.orderDebug.historyLookbackDaysSearched;
@@ -1244,13 +1435,18 @@ async function checkLeveragedPositionStatus(exch = exchange) {
   const symbol = toFuturesSymbol(el('symbol').value, exch);
 
   if (demoMode) {
-    const account = loadDemoAccount();
-    const position = account.leveraged.position;
-    if (!position || position.symbol !== symbol) {
-      renderPositionStatus({ hasPosition: false });
+    // Simulated positions belong to the exchange (and symbol format) they
+    // were opened on, since their fills come from that exchange's prices.
+    const stored = loadDemoAccount().leveraged.position;
+    const matches = stored && stored.symbol === symbol && (!stored.exchange || stored.exchange === exch);
+    const sync = matches ? await demoSync('leveraged') : null;
+    const position = sync && sync.acct.position;
+    if (exch === exchange) renderDemoAccountCard();
+    if (!position) {
+      if (exch === exchange) renderPositionStatus({ hasPosition: false });
       return { hasPosition: false, openedByApp: false };
     }
-    const currentPrice = Number(el('entry').value) || position.holdAvgPrice;
+    const currentPrice = position.lastPrice || position.holdAvgPrice;
     const pnl = computePnl({
       holdAvgPrice: position.holdAvgPrice,
       holdVol: position.holdVol,
@@ -1269,14 +1465,18 @@ async function checkLeveragedPositionStatus(exch = exchange) {
       mmr: position.mmr,
       restingOrders,
     });
-    renderPositionStatus({
-      hasPosition: true,
-      position: { holdAvgPrice: position.holdAvgPrice, holdVol: position.holdVol, leverage: position.leverage },
-      pnl: { ...pnl, currentPrice },
-      projectedLiquidation,
-      sinceTime: position.sinceTime,
-      orders: position.orders,
-    });
+    if (exch === exchange) {
+      renderPositionStatus({
+        hasPosition: true,
+        position: { holdAvgPrice: position.holdAvgPrice, holdVol: position.holdVol, leverage: position.leverage },
+        pnl: { ...pnl, currentPrice },
+        projectedLiquidation,
+        sinceTime: position.sinceTime,
+        orders: position.orders,
+        demoNote: `liquidation now $${fmtPrice(leveragedLiqPrice(position))} · fees $${fmt2(position.fees)} · funding ${signedUsd(-position.funding)} · simulated to ${new Date(position.lastPriceTime).toLocaleTimeString()}`,
+        ordersError: sync.error,
+      });
+    }
     return { hasPosition: true, openedByApp: true };
   }
 
@@ -1305,13 +1505,16 @@ async function checkSpotPositionStatus(exch = exchange) {
   const symbol = toSpotSymbol(el('symbol').value);
 
   if (demoMode) {
-    const account = loadDemoAccount();
-    const position = account.spot.position;
-    if (!position || position.symbol !== symbol) {
-      renderPositionStatus({ hasPosition: false });
+    const stored = loadDemoAccount().spot.position;
+    const matches = stored && stored.symbol === symbol && (!stored.exchange || stored.exchange === exch);
+    const sync = matches ? await demoSync('spot') : null;
+    const position = sync && sync.acct.position;
+    if (exch === exchange) renderDemoAccountCard();
+    if (!position) {
+      if (exch === exchange) renderPositionStatus({ hasPosition: false });
       return { hasPosition: false, openedByApp: false };
     }
-    const currentPrice = Number(el('entry').value) || position.holdAvgPrice;
+    const currentPrice = position.lastPrice || position.holdAvgPrice;
     const costBasis = position.holdAvgPrice * position.holdVol; // no leverage — cost basis IS the capital at risk
     const pnl = computePnl({
       holdAvgPrice: position.holdAvgPrice,
@@ -1321,14 +1524,18 @@ async function checkSpotPositionStatus(exch = exchange) {
       im: costBasis,
       isLong: true,
     });
-    renderPositionStatus({
-      hasPosition: true,
-      position: { holdAvgPrice: position.holdAvgPrice, holdVol: position.holdVol },
-      pnl: { ...pnl, currentPrice },
-      projectedLiquidation: null,
-      sinceTime: position.sinceTime,
-      orders: position.orders,
-    });
+    if (exch === exchange) {
+      renderPositionStatus({
+        hasPosition: true,
+        position: { holdAvgPrice: position.holdAvgPrice, holdVol: position.holdVol },
+        pnl: { ...pnl, currentPrice },
+        projectedLiquidation: null,
+        sinceTime: position.sinceTime,
+        orders: position.orders,
+        demoNote: `fees $${fmt2(position.fees)} · simulated to ${new Date(position.lastPriceTime).toLocaleTimeString()}`,
+        ordersError: sync.error,
+      });
+    }
     return { hasPosition: true, openedByApp: true };
   }
 
@@ -1464,7 +1671,13 @@ async function selectInitialTabByPosition(triedDiscovery) {
 
   if (candidates.length === 0) {
     if (triedDiscovery) return false; // already tried the fallback once -- nothing anywhere, give up
-    const discoveredAsset = await discoverActiveSymbol();
+    // The demo has no real account to scan; its only "account" is the
+    // simulated one in this browser.
+    const demoPos = demoMode && (loadDemoAccount().leveraged.position || loadDemoAccount().spot.position);
+    if (demoMode && !demoPos) return false;
+    const discoveredAsset = demoMode
+      ? demoPos.symbol.replace(/_?USDT$/, '')
+      : await discoverActiveSymbol();
     if (!discoveredAsset || discoveredAsset === el('symbol').value.trim().toUpperCase()) return false;
     el('symbol').value = discoveredAsset;
     return selectInitialTabByPosition(true);
@@ -1575,19 +1788,30 @@ async function closeLeveragedPosition() {
   tbody.innerHTML = '';
 
   if (demoMode) {
+    // Catch the simulation up first: the position may already have been
+    // liquidated, or more rungs filled, since the page last checked.
+    await demoSync('leveraged');
     const account = loadDemoAccount();
-    account.leveraged.position = null;
-    saveDemoAccount(account);
-    statusEl.textContent = `${symbol}: simulated orders canceled, position flat.`;
-    statusEl.className = 'price-status ok';
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>Close position</td>
-      <td style="text-align: left;">All simulated orders</td>
-      <td style="color: var(--green); text-align: left;">Closed (simulated)</td>
-    `;
-    tbody.appendChild(tr);
-    table.style.display = '';
+    const pos = account.leveraged.position;
+    if (!pos) {
+      statusEl.textContent = `No open simulated ${symbol} position to close (see "Simulated account" below).`;
+      statusEl.className = 'price-status err';
+    } else {
+      const exitPrice = await demoLivePrice('leveraged', pos);
+      const out = closePosition(account.leveraged, 'leveraged', exitPrice, Date.now());
+      account.leveraged = out.acct;
+      saveDemoAccount(account);
+      statusEl.textContent = `${symbol}: simulated orders canceled, position flat at $${fmtPrice(exitPrice)}. Net result ${signedUsd(out.trade.pnl)} after fees.`;
+      statusEl.className = 'price-status ok';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>Close position</td>
+        <td style="text-align: left;">All simulated orders</td>
+        <td style="color: var(--green); text-align: left;">Closed at $${fmtPrice(exitPrice)} (simulated)</td>
+      `;
+      tbody.appendChild(tr);
+      table.style.display = '';
+    }
     el('closeBtn').disabled = false;
     await Promise.all([checkPositionStatus(), fetchLiveBalance()]);
     return;
@@ -1652,19 +1876,30 @@ async function closeSpotPosition() {
   tbody.innerHTML = '';
 
   if (demoMode) {
+    // Catch the simulation up first: the position may already have been
+    // liquidated, or more rungs filled, since the page last checked.
+    await demoSync('spot');
     const account = loadDemoAccount();
-    account.spot.position = null;
-    saveDemoAccount(account);
-    statusEl.textContent = `${symbol}: simulated orders canceled, holdings sold.`;
-    statusEl.className = 'price-status ok';
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>Close position</td>
-      <td style="text-align: left;">All simulated orders + holdings</td>
-      <td style="color: var(--green); text-align: left;">Closed (simulated)</td>
-    `;
-    tbody.appendChild(tr);
-    table.style.display = '';
+    const pos = account.spot.position;
+    if (!pos) {
+      statusEl.textContent = `No open simulated ${symbol} position to close (see "Simulated account" below).`;
+      statusEl.className = 'price-status err';
+    } else {
+      const exitPrice = await demoLivePrice('spot', pos);
+      const out = closePosition(account.spot, 'spot', exitPrice, Date.now());
+      account.spot = out.acct;
+      saveDemoAccount(account);
+      statusEl.textContent = `${symbol}: simulated orders canceled, holdings sold at $${fmtPrice(exitPrice)}. Net result ${signedUsd(out.trade.pnl)} after fees.`;
+      statusEl.className = 'price-status ok';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>Close position</td>
+        <td style="text-align: left;">All simulated orders + holdings</td>
+        <td style="color: var(--green); text-align: left;">Closed at $${fmtPrice(exitPrice)} (simulated)</td>
+      `;
+      tbody.appendChild(tr);
+      table.style.display = '';
+    }
     el('closeBtn').disabled = false;
     await Promise.all([checkPositionStatus(), fetchLiveBalance()]);
     return;
@@ -1737,11 +1972,9 @@ async function fetchLeveragedBalance() {
   el('balanceBtn').disabled = true;
 
   if (demoMode) {
-    // Simulated bankroll minus margin committed to any open simulated
-    // position — no Bybit account involved.
-    const account = loadDemoAccount();
-    const committed = account.leveraged.position ? Number(account.leveraged.position.im) : 0;
-    const available = Math.max(0, account.leveraged.balance - committed);
+    // Simulated wallet minus margin tied up by the open position and its
+    // resting orders — no exchange account involved.
+    const available = demoAvailable(loadDemoAccount().leveraged, 'leveraged');
     el('capital').value = available.toFixed(2);
     statusEl.textContent = `Simulated balance: $${fmt2(available)} (demo — no real account connected)`;
     statusEl.className = 'price-status ok';
@@ -1779,10 +2012,7 @@ async function fetchSpotBalance() {
   el('balanceBtn').disabled = true;
 
   if (demoMode) {
-    const account = loadDemoAccount();
-    const position = account.spot.position;
-    const committed = position ? position.holdAvgPrice * position.holdVol : 0;
-    const available = Math.max(0, account.spot.balance - committed);
+    const available = demoAvailable(loadDemoAccount().spot, 'spot');
     el('capital').value = available.toFixed(2);
     statusEl.textContent = `Simulated balance: $${fmt2(available)} (demo — no real account connected)`;
     statusEl.className = 'price-status ok';
@@ -1958,6 +2188,48 @@ el('executeBtn').addEventListener('click', async () => {
   return mode === 'spot' ? executeSpotPlan() : executeLeveragedPlan();
 });
 
+// Demo Execute for either tab: Buy #1 fills at a freshly fetched live price,
+// the other rungs rest (the last one shrunk to what's free, like the real
+// last-order sweep), and the simulator takes it from there.
+async function demoExecute(modeName, { symbol, orders, leverage, mmr }) {
+  const statusEl = el('execStatus');
+  const table = el('execTable');
+  const tbody = table.querySelector('tbody');
+  await fetchLivePrice();
+  const livePrice = parseFloat(el('entry').value);
+  const account = loadDemoAccount();
+  let opened;
+  try {
+    opened = openPosition(account[modeName], modeName, { symbol, exchange, orders, livePrice, leverage, mmr, nowMs: Date.now() });
+  } catch (err) {
+    statusEl.textContent = err.message;
+    statusEl.className = 'price-status err';
+    el('executeBtn').disabled = false;
+    return;
+  }
+  account[modeName] = opened.acct;
+  saveDemoAccount(account);
+
+  statusEl.textContent = `${opened.position.orders.length}/${orders.length} orders simulated. Buy #1 filled at $${fmtPrice(livePrice)}; the limit orders fill when the real price reaches them.`;
+  if (opened.sweptQty !== null) {
+    statusEl.textContent += ` The last order was reduced to ${fmtQty(opened.sweptQty)} to fit your free simulated balance.`;
+  }
+  statusEl.className = 'price-status ok';
+  opened.position.orders.forEach((o) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${o.step}</td>
+      <td>$${fmtPrice(o.price)}</td>
+      <td>${fmtQty(o.vol)}</td>
+      <td style="color: var(--green); text-align: left;">${o.orderType === 5 ? 'Market — filled' : 'Limit — resting'} (simulated)</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  table.style.display = '';
+  el('executeBtn').disabled = false;
+  await Promise.all([checkPositionStatus(), fetchLiveBalance()]);
+}
+
 async function executeLeveragedPlan() {
   const execBox = el('execBox');
   const statusEl = el('execStatus');
@@ -2020,60 +2292,7 @@ async function executeLeveragedPlan() {
   tbody.innerHTML = '';
 
   if (demoMode) {
-    // Fill the market buy immediately, leave the rest resting — same shape
-    // as a real fresh Execute — and store it as this browser's simulated
-    // position. No network call, nothing touches Bybit. `capital` is 100%
-    // committed as margin across the ladder by design now — any tiny
-    // leftover here is just simulated qty-rounding drift, same meaning as
-    // the Spot tab's, not a deliberate reserve.
-    const mmr = parseFloat(el('mmr').value) / 100;
-    const marketOrder = orders.find((o) => o.market);
-    const committedMargin = orders.reduce((sum, o) => sum + (o.price * o.qty) / leverage, 0);
-    const leftoverCapital = Math.max(0, (capital || 0) - committedMargin);
-    const marketMargin = (marketOrder.price * marketOrder.qty) / leverage;
-
-    const account = loadDemoAccount();
-    account.leveraged.position = {
-      symbol,
-      holdAvgPrice: marketOrder.price,
-      holdVol: marketOrder.qty,
-      leverage,
-      mmr,
-      im: marketMargin,
-      sinceTime: Date.now(),
-      orders: orders.map((o) => ({
-        orderId: `DEMO-${o.step}`,
-        price: o.price,
-        vol: o.qty,
-        dealVol: o.market ? o.qty : 0,
-        dealAvgPrice: o.market ? o.price : 0,
-        side: 1,
-        orderType: o.market ? 5 : 1,
-        state: o.market ? 3 : 2,
-        createTime: Date.now(),
-      })),
-    };
-    saveDemoAccount(account);
-
-    statusEl.textContent = `${orders.length}/${orders.length} orders simulated successfully.`;
-    if (leftoverCapital > 0.01) {
-      statusEl.textContent += ` $${fmt2(leftoverCapital)} of capital wasn't committed to an order — still sitting in your (simulated) futures balance.`;
-    }
-    statusEl.className = 'price-status ok';
-    orders.forEach((o) => {
-      const tr = document.createElement('tr');
-      const label = o.market ? 'Market' : 'Limit';
-      tr.innerHTML = `
-        <td>${o.step}</td>
-        <td>$${fmtPrice(o.price)}</td>
-        <td>${o.qty}</td>
-        <td style="color: var(--green); text-align: left;">${label} — order DEMO-${o.step} (simulated)</td>
-      `;
-      tbody.appendChild(tr);
-    });
-    table.style.display = '';
-    el('executeBtn').disabled = false;
-    checkPositionStatus();
+    await demoExecute('leveraged', { symbol, orders, leverage, mmr: parseFloat(el('mmr').value) / 100 });
     return;
   }
 
@@ -2182,43 +2401,7 @@ async function executeSpotPlan() {
   tbody.innerHTML = '';
 
   if (demoMode) {
-    const marketOrder = orders.find((o) => o.market);
-    const account = loadDemoAccount();
-    account.spot.position = {
-      symbol,
-      holdAvgPrice: marketOrder.price,
-      holdVol: marketOrder.qty,
-      sinceTime: Date.now(),
-      orders: orders.map((o) => ({
-        orderId: `DEMO-${o.step}`,
-        price: o.price,
-        vol: o.qty,
-        dealVol: o.market ? o.qty : 0,
-        dealAvgPrice: o.market ? o.price : 0,
-        side: 1,
-        orderType: o.market ? 5 : 1,
-        state: o.market ? 3 : 2,
-        createTime: Date.now(),
-      })),
-    };
-    saveDemoAccount(account);
-
-    statusEl.textContent = `${orders.length}/${orders.length} orders simulated successfully.`;
-    statusEl.className = 'price-status ok';
-    orders.forEach((o) => {
-      const tr = document.createElement('tr');
-      const label = o.market ? 'Market' : 'Limit';
-      tr.innerHTML = `
-        <td>${o.step}</td>
-        <td>$${fmtPrice(o.price)}</td>
-        <td>${o.qty}</td>
-        <td style="color: var(--green); text-align: left;">${label} — order DEMO-${o.step} (simulated)</td>
-      `;
-      tbody.appendChild(tr);
-    });
-    table.style.display = '';
-    el('executeBtn').disabled = false;
-    checkPositionStatus();
+    await demoExecute('spot', { symbol, orders });
     return;
   }
 
@@ -2302,6 +2485,13 @@ updatePeakFeasibility();
 el('calcBtn').click();
 (async () => {
   await initDemoMode();
+  if (demoMode) {
+    // The simulator only advances when the page checks, so keep checking
+    // while it's open (it also catches up on anything missed while closed).
+    setInterval(() => {
+      if (document.visibilityState === 'visible' && el('statusCard').style.display !== 'none') checkPositionStatus();
+    }, 60 * 1000);
+  }
   const switchedTab = await selectInitialTabByPosition();
   if (!switchedTab) {
     await Promise.all([fetchLivePrice(), fetchLiveBalance()]);

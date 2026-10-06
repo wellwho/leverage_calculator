@@ -9,7 +9,12 @@
 //
 // Both are public endpoints, no auth needed.
 const { bybitPublicGet } = require('../bybitClient.js');
-const { getFuturesTicker, getFuturesKline } = require('../mexcClient.js');
+const { getFuturesTicker, getFuturesKline, getFuturesFundingHistory } = require('../mexcClient.js');
+
+// Optional kline params, used by the demo simulator (index.html's
+// demoFetchCandles): `interval` in Bybit's vocabulary and `start` in ms.
+// Without them the chart's original fixed 4h behaviour is unchanged.
+const KLINE_INTERVALS = new Set(['1', '5', '15', '60', '240', 'D']);
 
 // Read-only 4h candlestick data for the Position Status chart -- fixed
 // interval, no other timeframe exposed anywhere in the UI (see index.html's
@@ -20,15 +25,17 @@ const { getFuturesTicker, getFuturesKline } = require('../mexcClient.js');
 // (page load / Refresh status / after Execute), which is infrequent enough
 // that a plain per-request fetch is fine.
 async function handleKline(req, res, symbol, exchange) {
-  const limit = Math.min(Math.max(Number(req.query.limit) || 150, 10), 500);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 150, 10), 1000);
+  const interval = KLINE_INTERVALS.has(String(req.query.interval)) ? String(req.query.interval) : '240';
+  const startMs = Number(req.query.start) > 0 ? Number(req.query.start) : undefined;
   try {
     if (exchange === 'mexc') {
-      const candles = await getFuturesKline(symbol, limit);
+      const candles = await getFuturesKline(symbol, limit, { interval, startMs });
       res.status(200).json({ candles });
       return;
     }
 
-    const data = await bybitPublicGet('/v5/market/kline', { category: 'linear', symbol, interval: '240', limit });
+    const data = await bybitPublicGet('/v5/market/kline', { category: 'linear', symbol, interval, limit, start: startMs });
     if (!data || data.retCode !== 0 || !Array.isArray(data.result?.list)) {
       res.status(502).json({ error: data?.retMsg ? `Bybit: ${data.retMsg}` : 'Could not fetch candles from Bybit linear.' });
       return;
@@ -44,6 +51,30 @@ async function handleKline(req, res, symbol, exchange) {
   }
 }
 
+// Settled funding rates since `start` (ms), as [{ time, rate }] ascending.
+// Public data; the demo simulator charges these on simulated perp positions.
+async function handleFunding(req, res, symbol, exchange) {
+  const startMs = Number(req.query.start) || Date.now() - 7 * 24 * 60 * 60 * 1000;
+  try {
+    if (exchange === 'mexc') {
+      res.status(200).json({ funding: await getFuturesFundingHistory(symbol, startMs) });
+      return;
+    }
+    // Bybit returns at most 200 rows per call (~66 days at 8h); newest first.
+    const data = await bybitPublicGet('/v5/market/funding/history', { category: 'linear', symbol, startTime: startMs, endTime: Date.now(), limit: 200 });
+    if (!data || data.retCode !== 0 || !Array.isArray(data.result?.list)) {
+      res.status(502).json({ error: data?.retMsg ? `Bybit: ${data.retMsg}` : 'Could not fetch funding history from Bybit.' });
+      return;
+    }
+    const funding = data.result.list
+      .map((f) => ({ time: Number(f.fundingRateTimestamp), rate: Number(f.fundingRate) }))
+      .sort((a, b) => a.time - b.time);
+    res.status(200).json({ funding });
+  } catch (err) {
+    res.status(502).json({ error: `Failed to reach ${exchange === 'mexc' ? 'MEXC' : 'Bybit'} for funding history.`, detail: String(err.message || err) });
+  }
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
@@ -56,6 +87,11 @@ module.exports = async (req, res) => {
 
   if (req.query.kline === '1') {
     await handleKline(req, res, String(symbol).toUpperCase(), exchange);
+    return;
+  }
+
+  if (req.query.funding === '1') {
+    await handleFunding(req, res, String(symbol).toUpperCase(), exchange);
     return;
   }
 

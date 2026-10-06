@@ -52,7 +52,7 @@ There is no linter or formatter configured, and no test framework: tests are han
 
 **Auth and demo mode.**
 - `middleware.js` (Node runtime, not Edge) gates everything behind an HMAC-signed cookie issued by `api/login.js`. Keep the `.js` name: Vercel silently ignores `middleware.mjs`, which left the app unprotected until October 2026. After any auth change, confirm a cookie-less `curl` of `/api/balance` on production returns 401.
-- `DEMO_MODE=true` bypasses login. `index.html` then simulates the account client-side in `localStorage`, still using `statusCalc.js` and real public prices.
+- `DEMO_MODE=true` bypasses login. `index.html` then runs a paper-trading simulator client-side (`demoSim.js`, pure and shared like `calc.js`): limit fills, liquidation, fees and funding from real public candles/funding (`api/price.js?kline=1&interval=&start=`, `?funding=1`, `api/spot/kline`), with the account and trade history in `localStorage`. Demo mode must never call account endpoints, including discovery.
 
 ## Flush monitor (`monitor/`)
 
