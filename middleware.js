@@ -4,6 +4,10 @@
 // with api/login.js and api/logout.js — no Edge/Node crypto mismatch to
 // worry about.
 //
+// Must be named middleware.js (or .ts): Vercel silently ignores
+// middleware.mjs, which is how this file shipped from July to October 2026
+// with the whole app, including order placement, open to anyone.
+//
 // Env vars used: SESSION_SECRET (signs/verifies the cookie; APP_USERNAME
 // and APP_PASSWORD live only in api/login.js, this file never sees them).
 

@@ -51,7 +51,7 @@ There is no linter or formatter configured, and no test framework: tests are han
 - **Choosing what to show on page load.** `index.html` checks all 4 exchange × tab combinations, then falls back to `discoverActiveSymbol()`. It ranks app-opened first, then Leveraged over Spot, then the last-used exchange.
 
 **Auth and demo mode.**
-- `middleware.mjs` (Node runtime, not Edge) gates everything behind an HMAC-signed cookie issued by `api/login.js`.
+- `middleware.js` (Node runtime, not Edge) gates everything behind an HMAC-signed cookie issued by `api/login.js`. Keep the `.js` name: Vercel silently ignores `middleware.mjs`, which left the app unprotected until October 2026. After any auth change, confirm a cookie-less `curl` of `/api/balance` on production returns 401.
 - `DEMO_MODE=true` bypasses login. `index.html` then simulates the account client-side in `localStorage`, still using `statusCalc.js` and real public prices.
 
 ## Flush monitor (`monitor/`)

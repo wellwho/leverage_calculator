@@ -32,7 +32,7 @@ Live entry price is pulled from whichever exchange is currently selected (linear
 ### Auth
 - `login.html` — sign-in page
 - `api/login.js` / `api/logout.js` — issue/clear the session cookie
-- `middleware.mjs` — gates every route behind that session cookie (bypassed entirely in demo mode, see below)
+- `middleware.js` — gates every route behind that session cookie (bypassed entirely in demo mode, see below)
 
 ## Deploy to Vercel — detailed walkthrough
 
@@ -256,7 +256,7 @@ Demo mode simulates Leveraged and Spot as two independent fake accounts (`localS
 
 ## Login
 
-Since this deployment now trades on real Bybit and/or MEXC accounts, the whole app — the calculator page and every `api/*` endpoint — sits behind a login. `middleware.mjs` checks every request for a signed session cookie; anyone without one is redirected to `login.html` (or, for API calls, gets a 401).
+Since this deployment now trades on real Bybit and/or MEXC accounts, the whole app — the calculator page and every `api/*` endpoint — sits behind a login. `middleware.js` checks every request for a signed session cookie; anyone without one is redirected to `login.html` (or, for API calls, gets a 401).
 
 ### One-time setup
 
@@ -286,7 +286,8 @@ vercel --prod
 ### How it works
 - Signing in at `/login.html` posts to `api/login.js`, which checks the username/password against `APP_USERNAME`/`APP_PASSWORD` (constant-time comparison) and, on success, sets an `HttpOnly`, `Secure`, `SameSite=Strict` cookie signed with `SESSION_SECRET`. The cookie only carries an expiry timestamp + signature — no password material.
 - Sessions last 7 days, then you're prompted to sign in again.
-- `middleware.mjs` runs on Vercel's Node.js runtime (not Edge) so it shares byte-for-byte the same HMAC signing code as `api/login.js` — no cross-runtime crypto mismatches.
+- `middleware.js` runs on Vercel's Node.js runtime (not Edge) so it shares byte-for-byte the same HMAC signing code as `api/login.js` — no cross-runtime crypto mismatches.
+- **The file must be named `middleware.js` (or `.ts`).** Until October 2026 it was `middleware.mjs`, which Vercel silently ignores: every build shipped with no middleware, so the page and every `api/*` endpoint, including `execute` and `close`, were reachable without a login. A browser that still held a valid cookie looked exactly the same, which is why it went unnoticed. To verify the gate after any auth change: `curl -i "https://leveragecalculator.vercel.app/api/balance?exchange=bybit"` with no cookie must return `401`.
 - "Log out" (top-right of the calculator) calls `api/logout.js`, which clears the cookie, then sends you back to `login.html`.
 - This is single-user auth (one shared username/password) — there's no user database, matching the fact that this deploys against one Bybit account.
 
@@ -295,7 +296,7 @@ vercel --prod
 For showing the app to someone without giving them access to the real Bybit account behind the production URL, run a second Vercel project from this same repo in **demo mode**: no login wall, and every balance/position/order on the page is simulated in the visitor's own browser — nothing ever calls a real Bybit account endpoint.
 
 ### What demo mode changes
-- `middleware.mjs` skips the login check entirely when `DEMO_MODE=true`, so the page loads directly with no session required.
+- `middleware.js` skips the login check entirely when `DEMO_MODE=true`, so the page loads directly with no session required.
 - "Get balance", "Execute plan", "Close position" and the Position Status card no longer call `api/balance.js` / `api/execute.js` / `api/status.js` / `api/close.js`. Instead, `index.html` simulates a fake account (starting balance $1,000) entirely client-side, storing the simulated position in the browser's `localStorage`. The same `statusCalc.js` math (P&L, projected liquidation) that the real deployment uses server-side runs client-side for the simulation, so the numbers behave identically.
 - The live price feed (`api/price.js`) still hits Bybit's real *public* ticker — that's not account data, so the demo shows genuine live market prices while everything account-related is fake.
 - A "DEMO MODE" banner appears at the top of the page, and "Log out" becomes "Reset demo" (clears the simulated position/balance back to a fresh $1,000).

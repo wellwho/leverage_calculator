@@ -1,5 +1,5 @@
 // Vercel serverless function: clears the session cookie set by api/login.js.
-// Left in middleware.mjs's PUBLIC_PATHS so it always works, even against an
+// Left in middleware.js's PUBLIC_PATHS so it always works, even against an
 // already-expired session.
 
 module.exports = async (req, res) => {
